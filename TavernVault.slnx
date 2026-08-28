@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TavernVault.App/TavernVault.App.csproj" />
+    <Project Path="src/TavernVault.Core/TavernVault.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TavernVault.Core.Tests/TavernVault.Core.Tests.csproj" />
+  </Folder>
+</Solution>

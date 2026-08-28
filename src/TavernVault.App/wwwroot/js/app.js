@@ -1,0 +1,483 @@
+// 主界面：侧栏、过滤、网格/列表、详情抽屉
+
+import { api } from './api.js';
+import {
+  el, $, icon, hydrateIcons, toast, fmtSize, fmtDate, escapeHtml,
+  confirmDialog, promptDialog, openModal,
+} from './util.js';
+import { openEditor } from './editor.js';
+
+export const state = {
+  meta: null,
+  items: [],
+  filter: { kind: null, q: '', tag: null, fav: false, sort: 'name' },
+  view: localStorage.getItem('tv-view') || 'grid',
+  selectedId: null,
+};
+
+const KIND_META = {
+  character: { label: '角色卡', icon: 'character', color: '#d64f6f' },
+  lorebook: { label: '世界书', icon: 'lorebook', color: '#b47909' },
+  preset: { label: '预设', icon: 'preset', color: '#7458d6' },
+  theme: { label: '美化', icon: 'theme', color: '#0a84ad' },
+  script: { label: '脚本', icon: 'script', color: '#169160' },
+  text: { label: '文本', icon: 'text', color: '#64748b' },
+  archive: { label: '压缩包', icon: 'archive', color: '#92704f' },
+  other: { label: '其他', icon: 'other', color: '#8a939e' },
+};
+export const kindMeta = (kind) => KIND_META[kind] || KIND_META.other;
+
+// 展示名：卡片内名称优先，否则用文件名去扩展名
+export const nameOf = (item) =>
+  item.title || item.fileName.replace(/\.[^.]+$/, '');
+
+// ============ 侧边栏 ============
+
+export function renderSidebar() {
+  const meta = state.meta;
+  const nav = $('#nav');
+  nav.innerHTML = '';
+
+  const counts = {};
+  (meta?.kinds || []).forEach((k) => { counts[k.kind] = k.count; });
+  const total = meta?.total ?? 0;
+  $('#brand-count').textContent = `共 ${total} 个资源`;
+
+  const mkItem = ({ key, label, ico, color, count, active, onClick }) => {
+    const n = el(`
+      <button class="nav-item ${active ? 'active' : ''}">
+        ${color
+          ? `<span class="dot" style="background:${color}"></span>`
+          : `<span class="ico">${icon(ico)}</span>`}
+        <span>${escapeHtml(label)}</span>
+        <span class="count">${count ?? ''}</span>
+      </button>`);
+    n.addEventListener('click', onClick);
+    return n;
+  };
+
+  nav.appendChild(mkItem({
+    label: '全部资源', ico: 'all', count: total,
+    active: !state.filter.kind && !state.filter.fav && !state.filter.tag,
+    onClick: () => setFilter({ kind: null, fav: false, tag: null }),
+  }));
+
+  (meta?.kinds || []).forEach((k) => {
+    const km = KIND_META[k.kind] || KIND_META.other;
+    nav.appendChild(mkItem({
+      label: km.label, color: km.color, count: k.count,
+      active: state.filter.kind === k.kind,
+      onClick: () => setFilter({ kind: k.kind, fav: false, tag: null }),
+    }));
+  });
+
+  nav.appendChild(mkItem({
+    label: '我的收藏', ico: 'star', count: '',
+    active: state.filter.fav,
+    onClick: () => setFilter({ kind: null, fav: true, tag: null }),
+  }));
+
+  // 用户标签
+  const tags = meta?.userTags || [];
+  $('#tag-section').hidden = tags.length === 0;
+  const tagBox = $('#nav-tags');
+  tagBox.innerHTML = '';
+  tags.forEach((t) => {
+    const n = el(`
+      <button class="nav-item ${state.filter.tag === t ? 'active' : ''}">
+        <span class="ico">${icon('tag')}</span>
+        <span>${escapeHtml(t)}</span>
+      </button>`);
+    n.addEventListener('click', () => setFilter({ kind: null, fav: false, tag: state.filter.tag === t ? null : t }));
+    tagBox.appendChild(n);
+  });
+}
+
+function setFilter(patch) {
+  Object.assign(state.filter, patch);
+  refreshItems();
+}
+
+// ============ 列表 ============
+
+export async function refreshItems() {
+  $('#loading').hidden = false;
+  try {
+    state.items = await api.items({
+      kind: state.filter.kind || '',
+      q: state.filter.q,
+      tag: state.filter.tag || '',
+      fav: state.filter.fav ? 'true' : '',
+      sort: state.filter.sort,
+    });
+  } catch (e) {
+    toast(e.message, 'err');
+    state.items = [];
+  }
+  $('#loading').hidden = true;
+  renderContent();
+  renderSidebar();
+  // 抽屉打开时同步刷新
+  if (state.selectedId && !$('#drawer-overlay').hidden) {
+    const item = state.items.find((i) => i.id === state.selectedId);
+    if (!item) closeDrawer();
+  }
+}
+
+export function renderContent() {
+  const grid = $('#grid');
+  const empty = $('#empty');
+  grid.innerHTML = '';
+  const items = state.items;
+
+  // 过滤条
+  const f = state.filter;
+  const label = f.q ? `搜索“${f.q}”` : f.tag ? `标签：${f.tag}` : f.fav ? '我的收藏' : '';
+  $('#filter-bar').hidden = !label;
+  if (label) $('#filter-label').textContent = `${label} · ${items.length} 个结果`;
+
+  if (!items.length) {
+    empty.hidden = false;
+    const noRoot = !state.meta || !state.meta.roots || state.meta.roots.length === 0;
+    empty.innerHTML = '';
+    empty.appendChild(el(`
+      <div>
+        <div class="ico">${icon('folder')}</div>
+        <h3>${noRoot ? '还没有添加资源文件夹' : '这里空空如也'}</h3>
+        <div>${noRoot ? '在库设置中添加酒馆资源所在文件夹，即可自动识别角色卡、世界书与预设。' : '换个分类或关键词试试'}</div>
+        ${noRoot ? '<button class="btn primary" id="btn-empty-settings">添加文件夹</button>' : ''}
+      </div>`));
+    $('#btn-empty-settings', empty)?.addEventListener('click', () => {
+      import('./main.js').then((m) => m.showSettings());
+    });
+    return;
+  }
+  empty.hidden = true;
+
+  grid.classList.toggle('list', state.view === 'list');
+  for (const item of items) {
+    grid.appendChild(state.view === 'grid' ? renderCard(item) : renderRow(item));
+  }
+}
+
+function tileStyle(kind) {
+  const c = kindMeta(kind).color;
+  return `background: color-mix(in srgb, ${c} 14%, var(--surface-2)); color:${c}`;
+}
+
+function renderCard(item) {
+  const km = kindMeta(item.kind);
+  const media = item.hasEmbeddedCard
+    ? `<img loading="lazy" src="/api/thumb/${item.id}" alt="" onerror="this.style.display='none'">`
+    : `<div class="tile" style="${tileStyle(item.kind)}"><span class="ico">${icon(km.icon)}</span></div>`;
+  const metaBits = [
+    item.creator,
+    item.entryCount ? `${item.entryCount} 条` : null,
+    fmtSize(item.sizeBytes),
+  ].filter(Boolean).join(' · ');
+
+  const n = el(`
+    <article class="card" data-id="${item.id}">
+      <div class="thumb">
+        ${media}
+        <span class="badge k-${item.kind}">${km.label}</span>
+        <button class="fav-btn ${item.favorite ? 'on' : ''}" title="收藏">
+          <span class="ico">${icon('star')}</span>
+        </button>
+      </div>
+      <div class="card-body">
+        <h3>${escapeHtml(nameOf(item))}</h3>
+        <p class="meta">${escapeHtml(metaBits)}</p>
+      </div>
+    </article>`);
+
+  n.addEventListener('click', (e) => {
+    if (e.target.closest('.fav-btn')) return;
+    openDrawer(item.id);
+  });
+  n.querySelector('.fav-btn').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await toggleFavorite(item, n.querySelector('.fav-btn'));
+  });
+  return n;
+}
+
+function renderRow(item) {
+  const km = kindMeta(item.kind);
+  const media = item.hasEmbeddedCard
+    ? `<img loading="lazy" src="/api/thumb/${item.id}" alt="">`
+    : `<span class="ico" style="color:${km.color}">${icon(km.icon)}</span>`;
+  const n = el(`
+    <div class="row" data-id="${item.id}">
+      <div class="r-thumb">${media}</div>
+      <h3>${escapeHtml(nameOf(item))}</h3>
+      <div class="r-desc">${escapeHtml(item.description || item.relativeDir || '')}</div>
+      <span class="kind-chip" style="background:${km.color}">${km.label}</span>
+      <span class="r-meta">${fmtSize(item.sizeBytes)} · ${fmtDate(item.modifiedAt)}</span>
+      <button class="fav-btn ${item.favorite ? 'on' : ''}"><span class="ico">${icon('star')}</span></button>
+    </div>`);
+
+  n.addEventListener('click', (e) => {
+    if (e.target.closest('.fav-btn')) return;
+    openDrawer(item.id);
+  });
+  n.querySelector('.fav-btn').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await toggleFavorite(item, n.querySelector('.fav-btn'));
+  });
+  return n;
+}
+
+async function toggleFavorite(item, btn) {
+  try {
+    await api.favorite(item.id, !item.favorite);
+    item.favorite = !item.favorite;
+    btn.classList.toggle('on', item.favorite);
+    refreshItems();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+// ============ 详情抽屉 ============
+
+export async function openDrawer(id) {
+  state.selectedId = id;
+  const item = state.items.find((i) => i.id === id);
+  if (!item) return;
+  const overlay = $('#drawer-overlay');
+  overlay.hidden = false;
+  renderDrawer(item);
+  $('#drawer-overlay').querySelector('.drawer-close').focus();
+}
+
+export function closeDrawer() {
+  $('#drawer-overlay').hidden = true;
+  state.selectedId = null;
+}
+
+function renderDrawer(item) {
+  const km = kindMeta(item.kind);
+  const d = $('#drawer');
+  d.innerHTML = '';
+
+  const media = item.hasEmbeddedCard
+    ? `<img src="/api/image/${item.id}" alt="" onerror="this.style.display='none'">`
+    : `<span class="ico" style="color:${km.color}">${icon(km.icon)}</span>`;
+
+  const canEdit = ['character', 'lorebook', 'preset', 'theme', 'script', 'text'].includes(item.kind);
+  const stats = [
+    { k: '类型', v: `${km.label}${item.hasEmbeddedCard ? ' · 内嵌卡' : ''}` },
+    { k: '大小', v: fmtSize(item.sizeBytes) },
+    { k: '修改时间', v: fmtDate(item.modifiedAt) },
+    ...(item.entryCount ? [{ k: '条目 / 提示词', v: String(item.entryCount) }] : []),
+    { k: '所在目录', v: item.relativeDir || '（根目录）', wide: true },
+    { k: '文件名', v: item.fileName, wide: true },
+  ];
+
+  const contentTags = item.tags || [];
+  const userTags = item.userTags || [];
+
+  const body = el(`
+    <div class="drawer-wrap">
+      <div class="drawer-head">
+        <button class="icon-btn drawer-close" title="关闭 (Esc)"><span class="ico">${icon('x')}</span></button>
+      </div>
+      <div class="drawer-body">
+        <div class="drawer-preview">${media}</div>
+        <h2>${escapeHtml(nameOf(item))}</h2>
+        <div class="drawer-sub">
+          ${item.creator ? escapeHtml(item.creator) + ' · ' : ''}${item.version ? 'v' + escapeHtml(item.version) + ' · ' : ''}${km.label}
+        </div>
+        <div class="chips">
+          <span class="chip accent">${km.label}</span>
+          ${contentTags.map((t) => `<span class="chip">${escapeHtml(t)}</span>`).join('')}
+          ${userTags.map((t) => `<span class="chip" style="border:1px dashed var(--accent);color:var(--accent)">我的：${escapeHtml(t)}</span>`).join('')}
+        </div>
+        ${item.description ? `<div class="drawer-desc">${escapeHtml(item.description)}</div>` : ''}
+        <div class="user-tag-row">
+          <input type="text" id="drawer-usertags" placeholder="我的标签（逗号分隔）" value="${escapeHtml(userTags.join(', '))}">
+          <button class="btn sm" id="drawer-savetags">保存标签</button>
+        </div>
+        <div class="stat-grid">
+          ${stats.map((s) => `<div class="stat ${s.wide ? 'wide' : ''}"><span>${s.k}</span><b title="${escapeHtml(s.v)}">${escapeHtml(s.v)}</b></div>`).join('')}
+        </div>
+        <div class="drawer-actions">
+          ${canEdit ? `<button class="btn primary" data-act="edit"><span class="ico">${icon('edit')}</span>编辑</button>` : ''}
+          <button class="btn" data-act="reveal"><span class="ico">${icon('folder')}</span>打开所在文件夹</button>
+          <button class="btn" data-act="rename"><span class="ico">${icon('edit')}</span>重命名</button>
+          <button class="btn" data-act="move"><span class="ico">${icon('move')}</span>移动到…</button>
+          <button class="btn" data-act="copy"><span class="ico">${icon('copy')}</span>复制路径</button>
+          <button class="btn danger" data-act="delete"><span class="ico">${icon('trash')}</span>删除（回收站）</button>
+        </div>
+      </div>
+    </div>`);
+
+  d.appendChild(body);
+  hydrateIcons(d);
+
+  body.querySelector('.drawer-close').addEventListener('click', closeDrawer);
+  body.querySelector('#drawer-savetags').addEventListener('click', async () => {
+    const raw = body.querySelector('#drawer-usertags').value;
+    const tags = raw.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+    try {
+      await api.setTags(item.id, tags);
+      toast('标签已保存');
+      refreshItems();
+    } catch (e) { toast(e.message, 'err'); }
+  });
+
+  body.addEventListener('click', async (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (!act) return;
+    try {
+      if (act === 'edit') openEditor(item);
+      if (act === 'reveal') { await api.reveal(item.id); }
+      if (act === 'copy') {
+        await navigator.clipboard.writeText(item.fullPath);
+        toast('路径已复制');
+      }
+      if (act === 'rename') {
+        const name = await promptDialog({
+          title: '重命名', message: '只改文件名，保留扩展名。', value: nameOf(item),
+        });
+        if (name) {
+          const r = await api.rename(item.id, name);
+          toast('已重命名');
+          closeDrawer();
+          await refreshMeta();
+          await refreshItems();
+          openDrawer(r.id);
+        }
+      }
+      if (act === 'move') showMoveDialog(item);
+      if (act === 'delete') {
+        const yes = await confirmDialog({
+          title: '删除资源',
+          message: `“${nameOf(item)}” 将移入系统回收站，可在回收站恢复。`,
+          okText: '删除', danger: true,
+        });
+        if (yes) {
+          await api.remove(item.id);
+          toast('已移入回收站');
+          closeDrawer();
+          refreshItems();
+        }
+      }
+    } catch (err) { toast(err.message, 'err'); }
+  });
+}
+
+async function showMoveDialog(item) {
+  const cats = await api.categories();
+  const roots = state.meta.roots || [];
+  const options = cats.filter((c) => c.root === item.rootPath || roots.length === 1);
+  const body = el(`
+    <div>
+      <h3>移动“${escapeHtml(nameOf(item))}”</h3>
+      <p>选择目标库根目录与子目录（不存在会自动创建）。</p>
+      <div class="m-section-title">库根目录</div>
+      ${roots.map((r, i) => `
+        <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 2px">
+          <input type="radio" name="mv-root" value="${escapeHtml(r)}" ${r === item.rootPath ? 'checked' : ''}>
+          <span>${escapeHtml(r)}</span>
+        </label>`).join('')}
+      <div class="m-section-title">常用目录</div>
+      <div class="radio-list" id="mv-cats">
+        ${options.map((c) => `
+          <label><input type="radio" name="mv-dir" value="${escapeHtml(c.dir)}">
+            <span>${c.dir ? escapeHtml(c.dir) : '（根目录）'}</span><span class="cnt">${c.count}</span>
+          </label>`).join('') || '<p style="font-size:12px">暂无目录</p>'}
+      </div>
+      <input type="text" id="mv-custom" placeholder="或输入子目录，如：世界书/NSFW">
+      <div class="m-actions">
+        <button class="btn" data-act="cancel">取消</button>
+        <button class="btn primary" data-act="ok">移动</button>
+      </div>
+    </div>`);
+
+  const mask = openModal(body);
+  body.querySelector('#mv-custom').addEventListener('input', (e) => {
+    if (e.target.value) body.querySelectorAll('input[name=mv-dir]').forEach((r) => { r.checked = false; });
+  });
+  body.addEventListener('click', async (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (!act) return;
+    if (act === 'cancel') { mask.remove(); return; }
+    const root = body.querySelector('input[name=mv-root]:checked')?.value || item.rootPath;
+    const custom = body.querySelector('#mv-custom').value.trim();
+    const dir = custom || body.querySelector('input[name=mv-dir]:checked')?.value || '';
+    try {
+      const r = await api.move(item.id, root, dir);
+      mask.remove();
+      toast('已移动');
+      closeDrawer();
+      await refreshMeta();
+      await refreshItems();
+      openDrawer(r.id);
+    } catch (err) { toast(err.message, 'err'); }
+  });
+}
+
+// ============ 刷新入口 ============
+
+export async function refreshMeta() {
+  state.meta = await api.meta();
+}
+
+export function initShell() {
+  // 搜索
+  const search = $('#search');
+  let t;
+  search.addEventListener('input', () => {
+    clearTimeout(t);
+    t = setTimeout(() => {
+      state.filter.q = search.value.trim();
+      refreshItems();
+    }, 250);
+  });
+  $('#search-clear').addEventListener('click', () => {
+    search.value = '';
+    state.filter.q = '';
+    refreshItems();
+  });
+
+  // 排序
+  $('#sort').addEventListener('change', (e) => {
+    state.filter.sort = e.target.value;
+    refreshItems();
+  });
+
+  // 视图切换
+  document.querySelectorAll('#view-toggle button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.view === state.view);
+    b.addEventListener('click', () => {
+      state.view = b.dataset.view;
+      localStorage.setItem('tv-view', state.view);
+      document.querySelectorAll('#view-toggle button').forEach((x) =>
+        x.classList.toggle('active', x === b));
+      renderContent();
+    });
+  });
+
+  // 主题
+  $('#btn-theme').addEventListener('click', () => {
+    const cur = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = cur;
+    localStorage.setItem('tv-theme', cur);
+    $('#btn-theme .ico').innerHTML = icon(cur === 'dark' ? 'sun' : 'moon');
+  });
+
+  // 全局快捷键
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (!$('#drawer-overlay').hidden) closeDrawer();
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      $('#search').focus();
+    }
+  });
+
+  $('#drawer-overlay').addEventListener('mousedown', (e) => {
+    if (e.target.id === 'drawer-overlay') closeDrawer();
+  });
+}

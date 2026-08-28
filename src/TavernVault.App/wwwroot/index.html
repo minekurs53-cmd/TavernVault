@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>酒馆资源管家</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏺</text></svg>">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">馆</div>
+      <div class="brand-text">
+        <h1>酒馆资源管家</h1>
+        <span id="brand-count">索引中…</span>
+      </div>
+    </div>
+
+    <nav id="nav"></nav>
+
+    <section class="side-section" id="tag-section" hidden>
+      <h2>我的标签</h2>
+      <div id="nav-tags"></div>
+    </section>
+
+    <div class="side-spacer"></div>
+
+    <div class="side-footer">
+      <button class="side-btn" id="btn-rescan" title="重新扫描库目录">
+        <span class="ico" data-icon="refresh"></span>重新扫描
+      </button>
+      <button class="side-btn" id="btn-settings">
+        <span class="ico" data-icon="settings"></span>库设置
+      </button>
+      <div class="scan-info" id="scan-info"></div>
+    </div>
+  </aside>
+
+  <div id="main">
+    <header id="topbar">
+      <div class="search-wrap">
+        <span class="ico" data-icon="search"></span>
+        <input id="search" type="text" placeholder="搜索名称、描述、创作者、标签…" autocomplete="off">
+        <button id="search-clear" class="icon-btn tiny" hidden><span class="ico" data-icon="x"></span></button>
+      </div>
+      <select id="sort" title="排序方式">
+        <option value="name">按名称</option>
+        <option value="modified">按修改时间</option>
+        <option value="size">按大小</option>
+        <option value="kind">按类型</option>
+      </select>
+      <div class="seg" id="view-toggle" title="视图">
+        <button data-view="grid" class="active"><span class="ico" data-icon="grid"></span></button>
+        <button data-view="list"><span class="ico" data-icon="list"></span></button>
+      </div>
+      <button class="icon-btn" id="btn-theme" title="切换深浅色"><span class="ico" data-icon="moon"></span></button>
+    </header>
+
+    <div id="filter-bar" hidden>
+      <span id="filter-label"></span>
+      <button id="filter-clear" class="icon-btn tiny"><span class="ico" data-icon="x"></span></button>
+    </div>
+
+    <main id="content">
+      <div id="grid" class="grid"></div>
+      <div id="empty" class="empty" hidden></div>
+      <div id="loading" class="empty">正在加载…</div>
+    </main>
+  </div>
+</div>
+
+<div id="drawer-overlay" hidden><aside id="drawer"></aside></div>
+<div id="editor-overlay" hidden></div>
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

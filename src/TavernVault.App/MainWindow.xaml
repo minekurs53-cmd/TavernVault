@@ -1,0 +1,13 @@
+<Window x:Class="TavernVault.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="酒馆资源管家" Height="860" Width="1320"
+        MinHeight="600" MinWidth="980"
+        WindowStartupLocation="CenterScreen"
+        Background="#101214">
+    <Grid>
+        <wv2:WebView2 x:Name="Web"
+                      xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+                      DefaultBackgroundColor="#101214" />
+    </Grid>
+</Window>

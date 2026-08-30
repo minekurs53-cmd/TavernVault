@@ -118,9 +118,19 @@ export function confirmDialog({ title, message, okText = '确定', danger = fals
         </div>
       </div>`);
     const mask = openModal(body);
+    let settled = false;
+    const finish = (v) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener('keydown', onKey, true);
+      mask.remove();
+      resolve(v);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); finish(false); } };
+    document.addEventListener('keydown', onKey, true);
     body.addEventListener('click', (e) => {
       const act = e.target.closest('[data-act]')?.dataset.act;
-      if (act) { mask.remove(); resolve(act === 'ok'); }
+      if (act) finish(act === 'ok');
     });
   });
 }
@@ -141,7 +151,17 @@ export function promptDialog({ title, message = '', value = '', placeholder = ''
     const input = body.querySelector('input');
     input.focus();
     input.select();
-    const done = (ok) => { mask.remove(); resolve(ok ? input.value.trim() : null); };
+    let settled = false;
+    const finish = (v) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener('keydown', onKey, true);
+      mask.remove();
+      resolve(v);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); finish(null); } };
+    document.addEventListener('keydown', onKey, true);
+    const done = (ok) => finish(ok ? input.value.trim() : null);
     body.addEventListener('click', (e) => {
       const act = e.target.closest('[data-act]')?.dataset.act;
       if (act) done(act === 'ok');

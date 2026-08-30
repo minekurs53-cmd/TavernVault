@@ -39,25 +39,44 @@ public static class PngChunkIO
     /// 将 tEXt 块（keyword → text）写入 PNG：已有同关键字块则原位替换，否则插到 IHDR 之后。
     /// 未涉及的块（含其 CRC）字节级保留。通过临时文件 + File.Replace 原子落盘。
     /// </summary>
-    public static void WriteText(string path, string keyword, string text)
+    public static void WriteText(string path, string keyword, string text) =>
+        WriteTexts(path, [(keyword, text)]);
+
+    /// <summary>一次遍历写入多个 tEXt 块（如 chara + ccv3），避免整文件重复重写。</summary>
+    public static void WriteTexts(string path, IReadOnlyList<(string Keyword, string Text)> items)
     {
-        var payload = BuildTextChunk(keyword, text);
+        var payloads = items.Select(i => (i.Keyword, Chunk: BuildTextChunk(i.Keyword, i.Text))).ToList();
         var chunks = new List<byte[]>();
-        bool replaced = false;
+        var replaced = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var raw in EnumerateChunks(path))
         {
-            bool isTarget = TypeOf(raw) == TextType && StartsWithKeyword(DataOf(raw), keyword);
-            if (isTarget && replaced) continue; // 同关键字出现多次时只保留第一处
-            if (isTarget) { chunks.Add(payload); replaced = true; }
-            else chunks.Add(raw);
+            bool handled = false;
+            if (TypeOf(raw) == TextType)
+            {
+                var data = DataOf(raw);
+                var sep = data.IndexOf((byte)0);
+                if (sep >= 0)
+                {
+                    var key = Encoding.Latin1.GetString(data[..sep]);
+                    var hit = payloads.FindIndex(p => p.Keyword == key && !replaced.Contains(p.Keyword));
+                    if (hit >= 0)
+                    {
+                        chunks.Add(payloads[hit].Chunk);
+                        replaced.Add(payloads[hit].Keyword);
+                        handled = true;
+                    }
+                }
+            }
+            if (!handled) chunks.Add(raw);
         }
 
-        if (!replaced)
+        // 未被替换的（新增关键字）按给定顺序插到 IHDR 之后
+        var inserts = payloads.Where(p => !replaced.Contains(p.Keyword)).Select(p => p.Chunk).ToList();
+        if (inserts.Count > 0)
         {
-            // 插到 IHDR 之后（IHDR 必须是第一个块）
             int insertAt = chunks.Count > 0 && TypeOf(chunks[0]) == 0x49484452 ? 1 : 0; // "IHDR"
-            chunks.Insert(insertAt, payload);
+            chunks.InsertRange(insertAt, inserts);
         }
 
         using var ms = new MemoryStream();
@@ -109,13 +128,6 @@ public static class PngChunkIO
     private static uint TypeOf(byte[] raw) => BinaryPrimitives.ReadUInt32BigEndian(raw.AsSpan(4, 4));
 
     private static byte[] DataOf(byte[] raw) => raw[8..^4];
-
-    private static bool StartsWithKeyword(byte[] data, string keyword)
-    {
-        var sep = data.IndexOf((byte)0);
-        if (sep < 0) return false;
-        return Encoding.Latin1.GetString(data[..sep]) == keyword;
-    }
 
     private static byte[] BuildTextChunk(string keyword, string text)
     {

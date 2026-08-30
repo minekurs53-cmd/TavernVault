@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using Microsoft.AspNetCore.Builder;
 using TavernVault.App.Hosting;
@@ -27,8 +28,17 @@ public partial class App : Application
 
             if (e.Args.Contains("--server"))
             {
-                // 无窗口模式：供调试 / 远程访问
+                // 无窗口模式（WinExe 无控制台）：URL 同时落盘，便于脚本读取
                 Console.WriteLine($"TavernVault listening at {url}");
+                try
+                {
+                    var dir = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "TavernVault");
+                    Directory.CreateDirectory(dir);
+                    File.WriteAllText(Path.Combine(dir, "server-url.txt"), url);
+                }
+                catch (IOException) { }
             }
             else
             {

@@ -5,7 +5,7 @@ import {
   el, $, icon, hydrateIcons, toast, fmtSize, fmtDate, escapeHtml,
   confirmDialog, promptDialog, openModal,
 } from './util.js';
-import { openEditor } from './editor.js';
+import { openEditor, openBookEditor } from './editor.js';
 
 export const state = {
   meta: null,
@@ -289,6 +289,7 @@ function renderDrawer(item) {
         </div>
         <div class="chips">
           <span class="chip accent">${km.label}</span>
+          ${item.hasCharacterBook ? `<span class="chip" style="background:rgba(180,121,9,.16);color:#b47909">内置世界书 · ${item.entryCount} 条</span>` : ''}
           ${contentTags.map((t) => `<span class="chip">${escapeHtml(t)}</span>`).join('')}
           ${userTags.map((t) => `<span class="chip" style="border:1px dashed var(--accent);color:var(--accent)">我的：${escapeHtml(t)}</span>`).join('')}
         </div>
@@ -302,6 +303,7 @@ function renderDrawer(item) {
         </div>
         <div class="drawer-actions">
           ${canEdit ? `<button class="btn primary" data-act="edit"><span class="ico">${icon('edit')}</span>编辑</button>` : ''}
+          ${item.hasCharacterBook ? `<button class="btn" data-act="editbook" style="grid-column:span 2;justify-content:center"><span class="ico">${icon('lorebook')}</span>编辑内置世界书（${item.entryCount} 条）</button>` : ''}
           <button class="btn" data-act="reveal"><span class="ico">${icon('folder')}</span>打开所在文件夹</button>
           <button class="btn" data-act="rename"><span class="ico">${icon('edit')}</span>重命名</button>
           <button class="btn" data-act="move"><span class="ico">${icon('move')}</span>移动到…</button>
@@ -330,6 +332,7 @@ function renderDrawer(item) {
     if (!act) return;
     try {
       if (act === 'edit') openEditor(item);
+      if (act === 'editbook') openBookEditor(item);
       if (act === 'reveal') { await api.reveal(item.id); }
       if (act === 'copy') {
         await navigator.clipboard.writeText(item.fullPath);
@@ -427,7 +430,9 @@ export function initShell() {
   // 搜索
   const search = $('#search');
   let t;
+  const syncClear = () => { $('#search-clear').hidden = !search.value; };
   search.addEventListener('input', () => {
+    syncClear();
     clearTimeout(t);
     t = setTimeout(() => {
       state.filter.q = search.value.trim();
@@ -436,6 +441,7 @@ export function initShell() {
   });
   $('#search-clear').addEventListener('click', () => {
     search.value = '';
+    syncClear();
     state.filter.q = '';
     refreshItems();
   });
@@ -469,6 +475,7 @@ export function initShell() {
   // 全局快捷键
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (document.querySelector('.modal-mask')) return; // 弹窗自行处理
       if (!$('#drawer-overlay').hidden) closeDrawer();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {

@@ -14,10 +14,16 @@ public sealed class LibraryScanner
     {
         var result = new List<LibraryItem>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // 增量扫描：路径 + 大小 + 修改时间都未变的文件直接复用旧条目，跳过重新解析
+        var existingByPath = existing.Values
+            .GroupBy(i => i.FullPath, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToDictionary(i => i.FullPath, StringComparer.OrdinalIgnoreCase);
 
         foreach (var root in roots)
         {
             if (!Directory.Exists(root)) continue;
+            var rootFull = Path.GetFullPath(root);
             var opts = new EnumerationOptions
             {
                 RecurseSubdirectories = true,
@@ -29,23 +35,42 @@ public sealed class LibraryScanner
             {
                 var ext = Path.GetExtension(path);
                 if (ext.Equals(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
-                var dirName = Path.GetFileName(Path.GetDirectoryName(path)) ?? "";
-                if (dirName.StartsWith('.') || dirName == "node_modules") continue;
 
                 var full = Path.GetFullPath(path);
                 if (!seen.Add(full)) continue;
+                if (IsInExcludedDir(rootFull, full)) continue;
 
-                var item = BuildItem(full, root, existing);
+                var item = BuildItem(full, rootFull, existingByPath, existing);
                 if (item is not null) result.Add(item);
             }
         }
         return result;
     }
 
-    private static LibraryItem? BuildItem(string fullPath, string root, IReadOnlyDictionary<string, LibraryItem> existing)
+    /// <summary>相对根目录的任意一级目录被排除（.开头 / node_modules）则跳过。</summary>
+    private static bool IsInExcludedDir(string rootFull, string fullPath)
+    {
+        var rel = Path.GetRelativePath(rootFull, fullPath);
+        foreach (var seg in rel.Split('/', '\\'))
+        {
+            if (seg.StartsWith('.') || seg.Equals("node_modules", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    private static LibraryItem? BuildItem(string fullPath, string rootFull,
+        Dictionary<string, LibraryItem> existingByPath, IReadOnlyDictionary<string, LibraryItem> existingById)
     {
         var info = new FileInfo(fullPath);
         if (!info.Exists) return null;
+
+        // 未变化：整体复用旧条目（含用户数据与已解析摘要）
+        if (existingByPath.TryGetValue(fullPath, out var prev) &&
+            prev.SizeBytes == info.Length &&
+            prev.ModifiedAt == info.LastWriteTime &&
+            string.Equals(prev.RootPath, rootFull, StringComparison.OrdinalIgnoreCase))
+            return prev;
 
         var id = ComputeId(fullPath);
         var item = new LibraryItem
@@ -53,15 +78,15 @@ public sealed class LibraryScanner
             Id = id,
             FileName = info.Name,
             FullPath = fullPath,
-            RootPath = Path.GetFullPath(root),
-            RelativeDir = Path.GetRelativePath(root, Path.GetDirectoryName(fullPath)!),
+            RootPath = rootFull,
+            RelativeDir = Path.GetRelativePath(rootFull, Path.GetDirectoryName(fullPath)!),
             SizeBytes = info.Length,
             ModifiedAt = info.LastWriteTime,
         };
         if (item.RelativeDir == ".") item.RelativeDir = "";
 
         // 保留用户数据
-        if (existing.TryGetValue(id, out var old))
+        if (existingById.TryGetValue(id, out var old))
         {
             item.Favorite = old.Favorite;
             item.UserTags = old.UserTags;
@@ -135,6 +160,13 @@ public sealed class LibraryScanner
                 .Select(t => t.GetValue<string>())
                 .Where(s => !string.IsNullOrWhiteSpace(s))
                 .Take(20).ToList();
+
+        // 内嵌世界书（V2/V3 data.character_book）
+        if (data["character_book"] is JsonObject book && book["entries"] is JsonNode)
+        {
+            item.HasCharacterBook = true;
+            item.EntryCount = CharacterBook.CountEntries(book);
+        }
     }
 
     private static void FillFromLorebook(LibraryItem item, JsonObject obj)

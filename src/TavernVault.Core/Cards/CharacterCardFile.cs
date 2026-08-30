@@ -69,12 +69,34 @@ public static class CharacterCardFile
                 ["spec_version"] = "3.0",
                 ["data"] = data.DeepClone(),
             };
-            PngChunkIO.WriteText(path, CharaKey, Encode(v2));
-            PngChunkIO.WriteText(path, Ccv3Key, Encode(v3));
+            // 一次重写同时更新两个块（大 PNG 避免双倍 IO）
+            PngChunkIO.WriteTexts(path,
+            [
+                (CharaKey, Encode(v2)),
+                (Ccv3Key, Encode(v3)),
+            ]);
             return;
         }
 
+        SyncLegacyMirror(cardRoot);
         File.WriteAllText(path, cardRoot.ToJsonString(JsonOptions.WriteIndented), new UTF8Encoding(false));
+    }
+
+    // ST 的 JSON 导出格式在根级保留了 V1 镜像字段（name/description 等）。
+    // 编辑 data 后必须同步这些镜像，否则文件内部自相矛盾。
+    private static readonly string[] LegacyMirrorKeys =
+    ["name", "description", "personality", "scenario", "first_mes", "mes_example"];
+
+    private static void SyncLegacyMirror(JsonObject cardRoot)
+    {
+        if (cardRoot["data"] is not JsonObject data) return;
+        foreach (var key in LegacyMirrorKeys)
+        {
+            if (data.ContainsKey(key))
+                cardRoot[key] = data[key]!.DeepClone();
+            else if (cardRoot.ContainsKey(key))
+                cardRoot.Remove(key); // 用户清空了该字段，镜像一并移除
+        }
     }
 
     private static string Encode(JsonObject node) =>

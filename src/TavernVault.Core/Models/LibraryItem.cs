@@ -31,6 +31,9 @@ public class LibraryItem
     public int EntryCount { get; set; }
     public bool HasEmbeddedCard { get; set; }
 
+    /// <summary>角色卡 data.character_book 内嵌世界书（EntryCount 为其条目数）。</summary>
+    public bool HasCharacterBook { get; set; }
+
     // ---- 用户数据（重扫描时保留）----
     public bool Favorite { get; set; }
     public List<string> UserTags { get; set; } = [];

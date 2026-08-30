@@ -19,23 +19,19 @@ function clearDirty() {
 
 // ============ 打开 / 关闭 ============
 
-export async function openEditor(item) {
-  const editable = ['character', 'lorebook', 'preset', 'theme', 'script', 'text'];
-  if (!editable.includes(item.kind)) {
-    toast('该类型暂不支持在程序内编辑', 'err');
-    return;
-  }
-
+// 搭建编辑器骨架（头部 + 快捷键），返回内容容器
+function mountEditor(item, title, tabsHtml = '') {
+  dirty = false;
   const overlay = document.getElementById('editor-overlay');
   overlay.hidden = false;
   overlay.innerHTML = `
     <div class="editor-head">
       <button class="icon-btn editor-close" title="关闭 (Esc)"><span class="ico">${icon('x')}</span></button>
-      <h2>编辑 · ${kindMeta(item.kind).label}</h2>
+      <h2>${title}</h2>
       <span class="file-name">${escapeHtml(item.fileName)}</span>
       <span class="dirty-dot" title="有未保存的修改"></span>
       <div class="spacer"></div>
-      <div class="editor-tabs" id="editor-tabs" hidden></div>
+      ${tabsHtml}
       <button class="btn primary editor-save"><span class="ico">${icon('check')}</span>保存 (Ctrl+S)</button>
     </div>
     <div class="editor-body" id="editor-body"><div class="empty">加载中…</div></div>`;
@@ -45,21 +41,50 @@ export async function openEditor(item) {
   overlay.querySelector('.editor-save').addEventListener('click', () => doSave());
 
   onCloseCleanup = (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); closeEditor(); }
+    // 捕获阶段拦截并阻断传播，避免底层抽屉/弹窗同时响应 Esc
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeEditor();
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
+      e.stopPropagation();
       doSave();
     }
   };
   document.addEventListener('keydown', onCloseCleanup, true);
+  return overlay.querySelector('#editor-body');
+}
+
+export async function openEditor(item) {
+  const editable = ['character', 'lorebook', 'preset', 'theme', 'script', 'text'];
+  if (!editable.includes(item.kind)) {
+    toast('该类型暂不支持在程序内编辑', 'err');
+    return;
+  }
+
+  const tabsHtml = `<div class="editor-tabs" id="editor-tabs" hidden></div>`;
+  const body = mountEditor(item, `编辑 · ${kindMeta(item.kind).label}`, tabsHtml);
 
   try {
     if (item.kind === 'character') await buildCharacterEditor(item);
     else if (item.kind === 'lorebook') await buildLoreEditor(item);
     else await buildRawEditor(item, item.kind);
   } catch (e) {
-    $('#editor-body').innerHTML = '';
-    $('#editor-body').appendChild(el(`<div class="empty">加载失败：${escapeHtml(e.message)}</div>`));
+    body.innerHTML = '';
+    body.appendChild(el(`<div class="empty">加载失败：${escapeHtml(e.message)}</div>`));
+  }
+}
+
+// 打开角色卡内嵌世界书编辑器（复用世界书条目编辑界面）
+export async function openBookEditor(item) {
+  const body = mountEditor(item, '编辑 · 内置世界书');
+  try {
+    await buildLoreEditor(item, { embedded: true });
+  } catch (e) {
+    body.innerHTML = '';
+    body.appendChild(el(`<div class="empty">加载失败：${escapeHtml(e.message)}</div>`));
   }
 }
 
@@ -267,9 +292,10 @@ const POSITION_OPTIONS = [
   ['3', '作者注释之后'], ['4', '按深度插入'], ['5', '示例消息之前'], ['6', '示例消息之后'],
 ];
 
-async function buildLoreEditor(item) {
-  const data = await api.lore(item.id);
-  let entries = data.entries.map((e) => ({ key: e.key, data: e.data || {} }));
+async function buildLoreEditor(item, opts = {}) {
+  const embedded = !!opts.embedded; // 角色卡内嵌世界书模式
+  const data = embedded ? await api.cardBook(item.id) : await api.lore(item.id);
+  let entries = data.entries.map((e) => ({ key: e.key, data: e.data || {}, raw: e.raw }));
   let selected = 0;
 
   const body = $('#editor-body');
@@ -404,13 +430,24 @@ async function buildLoreEditor(item) {
 
   saveFn = async () => {
     try {
-      const r = await api.saveLore(item.id, {
-        entries: entries.map((e) => ({ key: e.key, data: e.data })),
-      });
-      clearDirty();
-      toast(`已保存（${r.count} 个条目）`);
-      refreshItems();
-      refreshMeta();
+      if (embedded) {
+        // raw（Spec 原条目）原样回传，服务端只合并被编辑的字段
+        const r = await api.saveCardBook(item.id, {
+          entries: entries.map((e) => ({ key: e.key, data: e.data, raw: e.raw })),
+        });
+        clearDirty();
+        toast(`内置世界书已保存（${r.count} 个条目）`);
+        refreshItems();
+        refreshMeta();
+      } else {
+        const r = await api.saveLore(item.id, {
+          entries: entries.map((e) => ({ key: e.key, data: e.data })),
+        });
+        clearDirty();
+        toast(`已保存（${r.count} 个条目）`);
+        refreshItems();
+        refreshMeta();
+      }
     } catch (e) { toast(e.message, 'err'); }
   };
 }

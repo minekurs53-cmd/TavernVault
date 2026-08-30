@@ -187,6 +187,71 @@ public static class ApiServer
             return Json(new { ok = true, id = LibraryScanner.ComputeId(item.FullPath) });
         }));
 
+        // ---------- 角色卡内嵌世界书（data.character_book） ----------
+        app.MapGet("/api/cards/{id}/book", (string id) =>
+        {
+            var item = vault.Find(id);
+            if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
+            try
+            {
+                var card = CharacterCardFile.Load(item.FullPath) as JsonObject;
+                if (card is null) return Err("无法解析角色卡", 400);
+                var data = CharacterCardFile.GetDataNode(card);
+                if (!CharacterBook.HasBook(data)) return Err("该卡片没有内置世界书", 404);
+
+                var list = new JsonArray();
+                foreach (var e in CharacterBook.ReadEntries(data["character_book"]!.AsObject()))
+                {
+                    list.Add(new JsonObject
+                    {
+                        ["key"] = e.MapKey,
+                        ["data"] = e.St.DeepClone(),
+                        ["raw"] = e.Raw?.DeepClone(), // Spec 原条目，保存时原样回传以合并编辑
+                    });
+                }
+                return Json(new { fileName = item.FileName, entries = list });
+            }
+            catch (Exception ex) { return Err(ex.Message, 500); }
+        });
+
+        // body: { entries: [{ key, data, raw? }] } —— raw 为 Spec 原条目时合并编辑，否则按 ST 格式写入
+        app.MapPut("/api/cards/{id}/book", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        {
+            var item = vault.Find(id);
+            if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
+
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            if (body?["entries"] is not JsonArray list) return Err("请求体格式错误", 400);
+
+            var card = CharacterCardFile.Load(item.FullPath) as JsonObject;
+            if (card is null) return Err("无法解析原角色卡", 400);
+            var data = CharacterCardFile.GetDataNode(card);
+
+            var book = data["character_book"] as JsonObject;
+            if (book is null)
+            {
+                book = CharacterBook.CreateBook();
+                data["character_book"] = book;
+            }
+
+            var entries = new List<CharacterBook.BookEntry>();
+            foreach (var node in list)
+            {
+                if (node is not JsonObject e) continue;
+                entries.Add(new CharacterBook.BookEntry
+                {
+                    MapKey = e["key"]?.GetValue<string>() ?? entries.Count.ToString(),
+                    St = e["data"] as JsonObject ?? new JsonObject(),
+                    Raw = (e["raw"] as JsonObject)?.DeepClone().AsObject(),
+                });
+            }
+            CharacterBook.WriteEntries(book, entries);
+
+            CharacterCardFile.Save(item.FullPath, card);
+            vault.Rescan();
+            return Json(new { ok = true, id = LibraryScanner.ComputeId(item.FullPath), count = entries.Count });
+        }));
+
         // ---------- 世界书编辑 ----------
         app.MapGet("/api/lore/{id}", (string id) =>
         {
@@ -279,9 +344,12 @@ public static class ApiServer
             var item = vault.Find(id);
             if (item is null) return Results.NotFound();
             var name = (await JsonNode.ParseAsync(req.Body))?["name"]?.GetValue<string>();
+            var userData = vault.GetUserData(id); // Id 随路径变化，先取快照
             var newPath = FileOperations.Rename(item, name ?? "");
             vault.Rescan();
-            return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath) });
+            var newId = LibraryScanner.ComputeId(newPath);
+            vault.SetUserData(newId, userData.Favorite, userData.Tags);
+            return Json(new { ok = true, id = newId });
         }));
 
         app.MapPost("/api/items/{id}/move", async (string id, HttpRequest req) => await HandleAsync(async () =>
@@ -292,9 +360,12 @@ public static class ApiServer
             var root = body?["root"]?.GetValue<string>() ?? item.RootPath;
             var dir = body?["dir"]?.GetValue<string>() ?? "";
             FileOperations.GuardUnderRoots(root, vault.Settings.LibraryRoots);
+            var userData = vault.GetUserData(id); // Id 随路径变化，先取快照
             var newPath = FileOperations.Move(item, root, dir);
             vault.Rescan();
-            return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath) });
+            var newId = LibraryScanner.ComputeId(newPath);
+            vault.SetUserData(newId, userData.Favorite, userData.Tags);
+            return Json(new { ok = true, id = newId });
         }));
 
         app.MapPost("/api/items/{id}/delete", (string id) => Handle(() =>

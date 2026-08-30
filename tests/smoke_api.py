@@ -106,6 +106,29 @@ call("POST", f"/api/items/{card_item['id']}/tags", {"tags": ["常用", "测试ta
 tagged = call("GET", "/api/items?tag=" + urllib.parse.quote("常用"))
 check("用户标签过滤", any(i["id"] == card_item["id"] for i in tagged))
 
+print("== 内嵌世界书（A 计划）==")
+card_items = call("GET", "/api/items?kind=character&q=" + urllib.parse.quote("测试卡"))
+check("卡片带内嵌书标记", card_items[0].get("hasCharacterBook") is True, f"entryCount={card_items[0].get('entryCount')}")
+book = call("GET", f"/api/cards/{card_items[0]['id']}/book")
+check("读取内嵌书 1 条", len(book["entries"]) == 1)
+e0 = book["entries"][0]
+check("Spec→ST 转换", e0["data"]["key"] == ["内置词"] and e0["data"]["order"] == 50 and e0["data"]["position"] == 0)
+check("raw 原条目回传", e0["raw"] is not None and e0["raw"].get("selective") is True)
+# 编辑：改内容并禁用，raw 原样回传
+e0["data"]["content"] = "编辑后的内置内容"
+e0["data"]["disable"] = True
+r = call("PUT", f"/api/cards/{card_items[0]['id']}/book", {"entries": book["entries"]})
+check("保存内嵌书", r.get("ok") is True and r.get("count") == 1)
+book2 = call("GET", f"/api/cards/{card_items[0]['id']}/book")
+e1 = book2["entries"][0]
+check("编辑生效", e1["data"]["content"] == "编辑后的内置内容" and e1["data"]["disable"] is True)
+card_now = call("GET", f"/api/cards/{card_items[0]['id']}")["card"]["data"]["character_book"]["entries"][0]
+check("未编辑字段保留", card_now.get("selective") is True and card_now.get("id") == 42)
+check("enabled 翻转正确", card_now.get("enabled") is False)
+check("position 保持字符串", card_now.get("position") == "before_char")
+check("索引条目数更新", call("GET", f"/api/items/{card_items[0]['id']}").get("entryCount") == 1)
+
+
 print("== 重命名 / 移动 ==")
 r = call("POST", f"/api/items/{card_item['id']}/rename", {"name": "改名卡"})
 check("重命名返回新id", bool(r.get("id")))

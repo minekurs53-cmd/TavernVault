@@ -127,6 +127,31 @@ public sealed class Vault
         }
     }
 
+    /// <summary>读取收藏 + 用户标签快照（重命名/移动前调用）。</summary>
+    public (bool Favorite, List<string> Tags) GetUserData(string id)
+    {
+        lock (_lock)
+        {
+            var item = Items.FirstOrDefault(i => i.Id == id);
+            return item is null ? (false, []) : (item.Favorite, [.. item.UserTags]);
+        }
+    }
+
+    /// <summary>把快照应用到新条目（重命名/移动后 Id 变化时迁移用户数据）。</summary>
+    public bool SetUserData(string id, bool favorite, List<string> tags)
+    {
+        lock (_lock)
+        {
+            var item = Items.FirstOrDefault(i => i.Id == id);
+            if (item is null) return false;
+            item.Favorite = favorite;
+            item.UserTags = tags.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            _store.SaveIndex(Items);
+            return true;
+        }
+    }
+
     public void AddRoot(string path)
     {
         var full = Path.GetFullPath(path);

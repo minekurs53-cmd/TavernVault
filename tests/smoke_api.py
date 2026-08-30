@@ -125,6 +125,48 @@ check("编辑生效", e1["data"]["content"] == "编辑后的内置内容" and e1
 card_now = call("GET", f"/api/cards/{card_items[0]['id']}")["card"]["data"]["character_book"]["entries"][0]
 check("未编辑字段保留", card_now.get("selective") is True and card_now.get("id") == 42)
 check("enabled 翻转正确", card_now.get("enabled") is False)
+
+print("== 自动备份与还原 ==")
+bk = call("GET", f"/api/items/{card_items[0]['id']}/backups")
+check("卡片编辑产生备份", len(bk) >= 1, f"共 {len(bk)} 份")
+oldest = bk[-1]
+# 还原到最早备份，description 应回到"原始描述"
+r = call("POST", f"/api/backups/{oldest['id']}/restore", {})
+check("还原成功", r.get("ok") is True)
+card_after = call("GET", f"/api/cards/{card_items[0]['id']}")["card"]["data"]
+check("还原回旧内容", card_after["description"] == "原始描述", card_after["description"])
+check("还原动作本身也产生了新备份", len(call("GET", f"/api/items/{card_items[0]['id']}/backups")) >= len(bk) + 1)
+mid = call("GET", f"/api/items/{card_items[0]['id']}/backups")[0]
+check("删除备份", call("DELETE", f"/api/backups/{mid['id']}", {}) .get("ok") is True)
+stats = call("GET", "/api/backups/stats")
+check("备份统计与开关", stats.get("autoBackup") is True and stats.get("maxPerFile") >= 1)
+
+print("== 另存为（自动命名）==")
+full_card = call("GET", f"/api/cards/{card_items[0]['id']}")["card"]
+r = call("POST", f"/api/cards/{card_items[0]['id']}/saveas", {"card": full_card})
+check("卡片另存为", r.get("ok") is True and "-副本" in r.get("fileName", ""), r.get("fileName"))
+copy_id = r["id"]
+copy_item = call("GET", f"/api/items/{copy_id}")
+check("副本被索引为角色卡", copy_item.get("kind") == "character")
+check("副本独立于原文件", copy_id != card_items[0]["id"])
+call("POST", f"/api/items/{copy_id}/delete", {})  # 清理副本
+
+lore_id2 = call("GET", "/api/items?kind=lorebook&q=" + urllib.parse.quote("测试书"))[0]["id"]
+lore_bk = call("GET", f"/api/lore/{lore_id2}")
+r = call("POST", f"/api/lore/{lore_id2}/saveas", {"entries": lore_bk["entries"]})
+check("世界书另存为", r.get("ok") is True and "-副本" in r.get("fileName", ""))
+call("POST", f"/api/items/{r['id']}/delete", {})
+
+r = call("POST", f"/api/cards/{card_items[0]['id']}/book/saveas", {"entries": book2["entries"]})
+check("内嵌书导出独立文件", r.get("ok") is True and "-副本" in r["fileName"], r.get("fileName"))
+call("POST", f"/api/items/{r['id']}/delete", {})
+
+r = call("POST", f"/api/text/{card_items[0]['id']}/saveas", {"content": "{bad"})
+check("另存为坏 JSON 被拒", "error" in (r or {}))
+r = call("POST", f"/api/text/{card_items[0]['id']}/saveas", {"content": "{\"ok\":1}"})
+check("文本另存为", r.get("ok") is True)
+call("POST", f"/api/items/{r['id']}/delete", {})
+call("PUT", f"/api/cards/{card_items[0]['id']}", {"fields": {"description": "原始描述"}})  # 恢复描述给重命名测试用
 check("position 保持字符串", card_now.get("position") == "before_char")
 check("索引条目数更新", call("GET", f"/api/items/{card_items[0]['id']}").get("entryCount") == 1)
 

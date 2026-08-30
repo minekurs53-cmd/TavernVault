@@ -43,7 +43,7 @@ public static class ApiServer
         {
             // 本地单用户服务：始终重校验，避免更新前端文件后被缓存卡住
             OnPrepareResponse = ctx =>
-                ctx.Context.Response.Headers.CacheControl = "no-cache",
+                ctx.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate",
         });
 
         MapApi(app, vault, thumbs, headless);
@@ -182,9 +182,96 @@ public static class ApiServer
             if (body["tags"] is JsonArray tags)
                 data["tags"] = (JsonArray)tags.DeepClone();
 
+            vault.BackupBeforeWrite(item.FullPath);
             CharacterCardFile.Save(item.FullPath, card);
             vault.Rescan();
             return Json(new { ok = true, id = LibraryScanner.ComputeId(item.FullPath) });
+        }));
+
+        // ---------- 另存为（自动命名副本） ----------
+        // 卡片：当前编辑内容写入新文件（PNG 先复制原图再重新内嵌，图像保留）
+        app.MapPost("/api/cards/{id}/saveas", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        {
+            var item = vault.Find(id);
+            if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            var cardNode = body?["card"] as JsonObject;
+            if (cardNode is null) return Err("请求体格式错误", 400);
+
+            var newPath = FileOperations.GetSaveAsPath(item.FullPath);
+            if (item.HasEmbeddedCard && item.FullPath.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+                File.Copy(item.FullPath, newPath); // 复制原图，再写入编辑后的卡片数据
+            await File.WriteAllTextAsync(newPath,
+                cardNode.ToJsonString(JsonOptions.WriteIndented), new UTF8Encoding(false));
+            CharacterCardFile.Save(newPath, cardNode);
+            vault.Rescan();
+            var nid = LibraryScanner.ComputeId(newPath);
+            return Json(new { ok = true, id = nid, fileName = Path.GetFileName(newPath) });
+        }));
+
+        // 世界书：编辑后的条目写入新文件（其它顶层键保留）
+        app.MapPost("/api/lore/{id}/saveas", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        {
+            var item = vault.Find(id);
+            if (item is null || item.Kind != ItemKind.Lorebook) return Err("不是世界书", 400);
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            if (body?["entries"] is not JsonArray list) return Err("请求体格式错误", 400);
+
+            var root = JsonNode.Parse(File.ReadAllText(item.FullPath)) as JsonObject
+                ?? throw new InvalidOperationException("原文件不是 JSON 对象");
+            var entries = new JsonObject();
+            foreach (var node in list)
+            {
+                if (node is not JsonObject e) continue;
+                entries[e["key"]?.GetValue<string>() ?? entries.Count.ToString()] = e["data"]?.DeepClone() ?? new JsonObject();
+            }
+            root["entries"] = entries;
+
+            var newPath = FileOperations.GetSaveAsPath(item.FullPath);
+            await File.WriteAllTextAsync(newPath, root.ToJsonString(JsonOptions.WriteIndented), new UTF8Encoding(false));
+            vault.Rescan();
+            return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath), fileName = Path.GetFileName(newPath) });
+        }));
+
+        // 内嵌世界书：导出为独立世界书（ST dict 格式）
+        app.MapPost("/api/cards/{id}/book/saveas", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        {
+            var item = vault.Find(id);
+            if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            if (body?["entries"] is not JsonArray list) return Err("请求体格式错误", 400);
+
+            var entries = new JsonObject();
+            foreach (var node in list)
+            {
+                if (node is not JsonObject e) continue;
+                entries[entries.Count.ToString()] = e["data"]?.DeepClone() ?? new JsonObject();
+            }
+            var displayName = item.DisplayName;
+            var dir = Path.GetDirectoryName(item.FullPath)!;
+            var newPath = FileOperations.GetSaveAsPath(Path.Combine(dir, displayName + ".json"));
+            var doc = new JsonObject { ["entries"] = entries };
+            await File.WriteAllTextAsync(newPath, doc.ToJsonString(JsonOptions.WriteIndented), new UTF8Encoding(false));
+            vault.Rescan();
+            return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath), fileName = Path.GetFileName(newPath) });
+        }));
+
+        // 文本/原始 JSON：内容写入新文件（.json 校验）
+        app.MapPost("/api/text/{id}/saveas", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        {
+            var item = vault.Find(id);
+            if (item is null) return Results.NotFound();
+            var content = (await JsonNode.ParseAsync(req.Body))?["content"]?.GetValue<string>();
+            if (content is null) return Err("请求体格式错误", 400);
+            if (Path.GetExtension(item.FullPath).Equals(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                try { _ = JsonNode.Parse(content); }
+                catch (System.Text.Json.JsonException ex) { return Err($"JSON 校验失败：{ex.Message}", 400); }
+            }
+            var newPath = FileOperations.GetSaveAsPath(item.FullPath);
+            await File.WriteAllTextAsync(newPath, content, new UTF8Encoding(false));
+            vault.Rescan();
+            return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath), fileName = Path.GetFileName(newPath) });
         }));
 
         // ---------- 角色卡内嵌世界书（data.character_book） ----------
@@ -247,6 +334,7 @@ public static class ApiServer
             }
             CharacterBook.WriteEntries(book, entries);
 
+            vault.BackupBeforeWrite(item.FullPath);
             CharacterCardFile.Save(item.FullPath, card);
             vault.Rescan();
             return Json(new { ok = true, id = LibraryScanner.ComputeId(item.FullPath), count = entries.Count });
@@ -290,6 +378,7 @@ public static class ApiServer
             }
             root["entries"] = entries;
 
+            vault.BackupBeforeWrite(item.FullPath);
             await File.WriteAllTextAsync(item.FullPath, root.ToJsonString(JsonOptions.WriteIndented), new UTF8Encoding(false));
             vault.Rescan();
             return Json(new { ok = true, count = entries.Count });
@@ -320,9 +409,45 @@ public static class ApiServer
                 catch (System.Text.Json.JsonException ex) { return Err($"JSON 校验失败：{ex.Message}", 400); }
             }
 
+            vault.BackupBeforeWrite(item.FullPath);
             await File.WriteAllTextAsync(item.FullPath, content, new UTF8Encoding(false));
             vault.Rescan();
             return Json(new { ok = true });
+        }));
+
+        // ---------- 备份与还原 ----------
+        app.MapGet("/api/items/{id}/backups", (string id) =>
+        {
+            var item = vault.Find(id);
+            if (item is null) return Results.NotFound();
+            return Json(vault.Backups.List(item.FullPath));
+        });
+
+        app.MapPost("/api/backups/{bid}/restore", (string bid) => Handle(() =>
+        {
+            var path = vault.Backups.Restore(bid) ?? throw new InvalidOperationException("备份不存在或已损坏");
+            vault.Rescan();
+            return Json(new { ok = true, id = LibraryScanner.ComputeId(path) });
+        }));
+
+        app.MapDelete("/api/backups/{bid}", (string bid) => Handle(() =>
+            vault.Backups.Delete(bid) ? Json(new { ok = true }) : Err("备份不存在", 404)));
+
+        app.MapGet("/api/backups/stats", () =>
+        {
+            var (count, bytes) = vault.Backups.Stats();
+            return Json(new { count, bytes, autoBackup = vault.Settings.AutoBackup, maxPerFile = vault.Settings.MaxBackupsPerFile });
+        });
+
+        app.MapPost("/api/settings/backup", async (HttpRequest req) => await HandleAsync(async () =>
+        {
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            if (body?["autoBackup"] is JsonValue ab) vault.Settings.AutoBackup = ab.GetValue<bool>();
+            if (body?["maxPerFile"] is JsonValue mx && mx.TryGetValue<int>(out var max))
+                vault.Settings.MaxBackupsPerFile = Math.Clamp(max, 1, 50);
+            vault.Backups.MaxPerFile = Math.Clamp(vault.Settings.MaxBackupsPerFile, 1, 50);
+            vault.SaveSettings();
+            return Json(new { ok = true, autoBackup = vault.Settings.AutoBackup, maxPerFile = vault.Settings.MaxBackupsPerFile });
         }));
 
         // ---------- 文件操作 ----------
@@ -345,6 +470,7 @@ public static class ApiServer
             if (item is null) return Results.NotFound();
             var name = (await JsonNode.ParseAsync(req.Body))?["name"]?.GetValue<string>();
             var userData = vault.GetUserData(id); // Id 随路径变化，先取快照
+            vault.BackupBeforeWrite(item.FullPath);
             var newPath = FileOperations.Rename(item, name ?? "");
             vault.Rescan();
             var newId = LibraryScanner.ComputeId(newPath);

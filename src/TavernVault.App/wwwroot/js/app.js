@@ -308,6 +308,7 @@ function renderDrawer(item) {
           <button class="btn" data-act="rename"><span class="ico">${icon('edit')}</span>重命名</button>
           <button class="btn" data-act="move"><span class="ico">${icon('move')}</span>移动到…</button>
           <button class="btn" data-act="copy"><span class="ico">${icon('copy')}</span>复制路径</button>
+          <button class="btn" data-act="backups"><span class="ico">${icon('archive')}</span>备份与还原</button>
           <button class="btn danger" data-act="delete"><span class="ico">${icon('trash')}</span>删除（回收站）</button>
         </div>
       </div>
@@ -333,6 +334,7 @@ function renderDrawer(item) {
     try {
       if (act === 'edit') openEditor(item);
       if (act === 'editbook') openBookEditor(item);
+      if (act === 'backups') showBackups(item);
       if (act === 'reveal') { await api.reveal(item.id); }
       if (act === 'copy') {
         await navigator.clipboard.writeText(item.fullPath);
@@ -366,6 +368,67 @@ function renderDrawer(item) {
         }
       }
     } catch (err) { toast(err.message, 'err'); }
+  });
+}
+
+// 备份与还原弹窗：列出该文件的自动备份，可还原/删除
+async function showBackups(item) {
+  const list = await api.backups(item.id);
+  const body = el(`
+    <div>
+      <h3>备份与还原</h3>
+      <p>“${escapeHtml(nameOf(item))}” 的历史备份（编辑保存前自动创建，份数可在库设置中调整）。</p>
+      <div class="backup-list"></div>
+      <div class="m-actions">
+        <button class="btn" data-act="close">关闭</button>
+      </div>
+    </div>`);
+  const mask = openModal(body);
+  const box = body.querySelector('.backup-list');
+
+  const renderList = (items) => {
+    box.innerHTML = '';
+    if (!items.length) {
+      box.appendChild(el('<div class="empty" style="padding:16px">还没有备份——下次编辑保存时会自动创建</div>'));
+      return;
+    }
+    for (const b of items) {
+      const row = el(`<div class="backup-item">
+        <span class="b-time">${escapeHtml(new Date(b.savedAt).toLocaleString())}</span>
+        <span class="b-size">${fmtSize(b.sizeBytes)}</span>
+        <button class="btn sm" data-bid="${b.id}" data-op="restore">还原</button>
+        <button class="btn sm danger" data-bid="${b.id}" data-op="delete">删除</button>
+      </div>`);
+      row.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-op]');
+        if (!btn) return;
+        try {
+          if (btn.dataset.op === 'restore') {
+            const yes = await confirmDialog({
+              title: '还原备份',
+              message: `把文件还原到 ${new Date(b.savedAt).toLocaleString()} 的状态？当前文件会先自动备份一份。`,
+              okText: '还原',
+            });
+            if (!yes) return;
+            const r = await api.restoreBackup(b.id);
+            toast('已还原');
+            mask.remove();
+            closeDrawer();
+            await refreshMeta();
+            await refreshItems();
+            openDrawer(r.id);
+          } else {
+            await api.deleteBackup(b.id);
+            renderList(await api.backups(item.id));
+          }
+        } catch (err) { toast(err.message, 'err'); }
+      });
+      box.appendChild(row);
+    }
+  };
+  renderList(list);
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('[data-act=close]')) mask.remove();
   });
 }
 

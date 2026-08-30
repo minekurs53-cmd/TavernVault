@@ -32,6 +32,7 @@ function mountEditor(item, title, tabsHtml = '') {
       <span class="dirty-dot" title="有未保存的修改"></span>
       <div class="spacer"></div>
       ${tabsHtml}
+      <button class="btn editor-saveas" title="把当前内容保存为新文件（自动命名）"><span class="ico">${icon('copy')}</span>另存为</button>
       <button class="btn primary editor-save"><span class="ico">${icon('check')}</span>保存 (Ctrl+S)</button>
     </div>
     <div class="editor-body" id="editor-body"><div class="empty">加载中…</div></div>`;
@@ -39,6 +40,7 @@ function mountEditor(item, title, tabsHtml = '') {
 
   overlay.querySelector('.editor-close').addEventListener('click', () => closeEditor());
   overlay.querySelector('.editor-save').addEventListener('click', () => doSave());
+  overlay.querySelector('.editor-saveas').addEventListener('click', () => doSaveAs());
 
   onCloseCleanup = (e) => {
     // 捕获阶段拦截并阻断传播，避免底层抽屉/弹窗同时响应 Esc
@@ -70,6 +72,7 @@ export async function openEditor(item) {
   try {
     if (item.kind === 'character') await buildCharacterEditor(item);
     else if (item.kind === 'lorebook') await buildLoreEditor(item);
+    else if (item.kind === 'preset') await buildPresetEditor(item);
     else await buildRawEditor(item, item.kind);
   } catch (e) {
     body.innerHTML = '';
@@ -108,7 +111,12 @@ export async function closeEditor() {
 }
 
 let saveFn = null;
+let saveAsFn = null;
 function doSave() { saveFn?.(); }
+function doSaveAs() {
+  if (!saveAsFn) { toast('当前视图不支持另存为', 'err'); return; }
+  saveAsFn?.();
+}
 
 function bindDirty(root) {
   root.addEventListener('input', () => markDirty());
@@ -283,6 +291,26 @@ async function buildCharacterEditor(item, preloaded = null) {
       else toast(e.message, 'err');
     }
   };
+
+  saveAsFn = async () => {
+    try {
+      let cardToSave;
+      if (!rawView.hidden) {
+        cardToSave = JSON.parse(raw.area.value); // 原始 JSON 模式
+      } else {
+        applyFormToCard();
+        cardToSave = JSON.parse(JSON.stringify(card));
+      }
+      const r = await api.saveCardAs(item.id, cardToSave);
+      clearDirty();
+      toast(`已另存为 ${r.fileName}`);
+      refreshItems();
+      refreshMeta();
+    } catch (e) {
+      if (e instanceof SyntaxError) toast('JSON 格式错误：' + e.message, 'err');
+      else toast(e.message, 'err');
+    }
+  };
 }
 
 // ============ 世界书编辑 ============
@@ -450,6 +478,218 @@ async function buildLoreEditor(item, opts = {}) {
       }
     } catch (e) { toast(e.message, 'err'); }
   };
+
+  saveAsFn = async () => {
+    try {
+      const payload = entries.map((e) => ({ key: e.key, data: e.data, raw: e.raw }));
+      const r = embedded
+        ? await api.saveCardBookAs(item.id, payload) // 导出为独立世界书
+        : await api.saveLoreAs(item.id, payload);
+      toast(`已另存为 ${r.fileName}`);
+      refreshItems();
+      refreshMeta();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+}
+
+// ============ 预设可视化（B 计划一期：只读） ============
+
+const SAMPLER_LABELS = {
+  temperature: '温度', frequency_penalty: '频率惩罚', presence_penalty: '存在惩罚',
+  top_p: 'Top P', top_k: 'Top K', top_a: 'Top A', min_p: 'Min P',
+  repetition_penalty: '重复惩罚', open_max_context: '最大上下文解锁',
+  max_context_unlocked: '最大上下文解锁', openai_max_tokens: '最大回复长度',
+  openai_max_context: '上下文上限', openai_model: '模型', stream_openai: '流式输出',
+  wrap_in_quotes: '引号包裹引文', names_behavior: '名字补充行为',
+  squash_system_messages: '合并系统消息', continue_prefill: '续写预填充',
+  continue_postfix: '续写后缀', continue_nudge_prompt: '续写提示',
+  impersonation_prompt: '扮演提示', new_chat_prompt: '新对话提示',
+  new_group_chat_prompt: '新群聊提示', new_example_chat_prompt: '新示例提示',
+  continue_nudge: '续写推动', bias_preset_selected: '偏好预设',
+  function_calling: '函数调用', show_thoughts: '显示思考',
+  reasoning_effort: '推理力度', enable_web_search: '联网搜索',
+  request_images: '请求图片', image_inlining: '图片内联',
+  assistant_prefill: '助手预填充', assistant_impersonation: '助手扮演预填充',
+  claude_use_sysprompt: 'Claude 系统提示', prompt_instructions: '指令提示',
+  prompt_order: '生效顺序', prompts: '提示词列表',
+  utility_prompts: '工具提示词', regex: '正则',
+};
+
+const ROLE_LABELS = { system: '系统', user: '用户', assistant: 'AI' };
+
+// 预设可视化视图：采样参数总览 + 按 prompt_order 解析的生效顺序 + 内容查看
+async function buildPresetEditor(item) {
+  const { content } = await api.text(item.id);
+  let preset;
+  try { preset = JSON.parse(content); } catch { preset = null; }
+
+  const tabs = $('#editor-tabs');
+  tabs.hidden = false;
+  tabs.innerHTML = `
+    <button data-tab="visual" class="active">可视化</button>
+    <button data-tab="raw">原文</button>`;
+
+  const body = $('#editor-body');
+  body.innerHTML = '';
+  const visualView = el('<div class="form-scroll" style="flex:1"></div>');
+  const rawView = el('<div class="raw-wrap" hidden></div>');
+  body.appendChild(visualView);
+  body.appendChild(rawView);
+
+  // ---- 原文视图 ----
+  const raw = buildRawArea(content, { json: true, flex: true });
+  rawView.appendChild(raw.root);
+  bindDirty(rawView);
+
+  // ---- 可视化视图（只读）----
+  if (preset) renderPresetVisual(visualView, preset);
+  else visualView.appendChild(el('<div class="empty">JSON 解析失败，请使用原文视图修正</div>'));
+
+  let visualActive = true;
+  tabs.addEventListener('click', (e) => {
+    const tab = e.target.closest('[data-tab]')?.dataset.tab;
+    if (!tab) return;
+    tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === e.target));
+    visualActive = tab === 'visual';
+    visualView.hidden = !visualActive;
+    rawView.hidden = visualActive;
+    if (!visualActive && dirty) { clearDirty(); raw.area.value = content; } // 可视化不改内容
+  });
+
+  saveFn = async () => {
+    if (visualActive) { toast('可视化视图为只读，请切换到"原文"修改后保存', 'err'); return; }
+    if (!raw.validate()) { toast('JSON 校验失败，请先修正', 'err'); return; }
+    try {
+      await api.saveText(item.id, raw.area.value);
+      clearDirty();
+      toast('已保存');
+      refreshItems();
+      refreshMeta();
+      const fresh = await api.text(item.id);
+      content = fresh.content;
+      try { preset = JSON.parse(content); visualView.innerHTML = ''; renderPresetVisual(visualView, preset); } catch { }
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
+  saveAsFn = async () => {
+    if (visualActive) { toast('可视化视图为只读，请切换到"原文"后再另存', 'err'); return; }
+    if (!raw.validate()) { toast('JSON 校验失败，无法另存', 'err'); return; }
+    try {
+      const r = await api.saveTextAs(item.id, raw.area.value);
+      toast(`已另存为 ${r.fileName}`);
+      refreshItems();
+      refreshMeta();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+}
+
+function renderPresetVisual(root, preset) {
+  const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
+  const orderGroups = Array.isArray(preset.prompt_order) ? preset.prompt_order : [];
+  const group = orderGroups.find((g) => g.character_id === 100001) || orderGroups[0];
+  const orderList = Array.isArray(group?.order) ? group.order : [];
+  const byId = new Map(prompts.map((p) => [p.identifier, p]));
+  const orderedIds = new Set(orderList.map((o) => o.identifier));
+
+  const wrap = el('<div class="form-wrap"></div>');
+
+  // --- 采样参数总览 ---
+  const paramsCard = el('<div class="form-card"><h4>采样与生成参数（只读）</h4><div class="param-grid"></div></div>');
+  const grid = paramsCard.querySelector('.param-grid');
+  const entries = Object.entries(preset).filter(([k, v]) =>
+    (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
+    && !k.startsWith('_') && v !== '');
+  for (const [k, v] of entries) {
+    const label = SAMPLER_LABELS[k] || k;
+    grid.appendChild(el(`<div class="param" title="${escapeHtml(k)}">
+      <span>${escapeHtml(label)}</span><b>${escapeHtml(String(v))}</b></div>`));
+  }
+  if (!entries.length) grid.appendChild(el('<div class="empty" style="padding:10px">无标量参数</div>'));
+  wrap.appendChild(paramsCard);
+
+  // --- 生效顺序 ---
+  const orderCard = el(`<div class="form-card"><h4>生效顺序（prompt_order · 默认角色）</h4>
+    <div class="preset-list"></div></div>`);
+  const list = orderCard.querySelector('.preset-list');
+  let enabledCount = 0;
+  orderList.forEach((o, idx) => {
+    const p = byId.get(o.identifier);
+    const isMarker = p?.marker === true || p?.system_prompt === true;
+    const name = p?.name || o.identifier;
+    const role = isMarker ? '系统' : (p?.role ? (ROLE_LABELS[p.role] || p.role) : '—');
+    const len = p?.content ? p.content.length : 0;
+    if (o.enable) enabledCount++;
+    const row = el(`<div class="preset-row ${o.enable ? '' : 'off'}" data-ident="${escapeHtml(o.identifier)}">
+      <span class="po-idx">${idx + 1}</span>
+      <span class="po-en">${o.enable ? '✓' : '✗'}</span>
+      <span class="po-name">${escapeHtml(name)}</span>
+      <span class="po-role">${role}</span>
+      <span class="po-len">${len ? len + ' 字' : ''}</span>
+    </div>`);
+    row.addEventListener('click', () => {
+      list.querySelectorAll('.preset-row').forEach((r) => r.classList.remove('sel'));
+      row.classList.add('sel');
+      renderPresetDetail(detail, p, o.identifier);
+    });
+    list.appendChild(row);
+  });
+  wrap.appendChild(orderCard);
+
+  // 未加入生效序列的提示词
+  const unordered = prompts.filter((p) => !orderedIds.has(p.identifier));
+  if (unordered.length) {
+    const uCard = el('<div class="form-card"><h4>未加入生效序列的提示词</h4><div class="preset-list"></div></div>');
+    const ul = uCard.querySelector('.preset-list');
+    unordered.forEach((p) => {
+      const row = el(`<div class="preset-row" data-ident="${escapeHtml(p.identifier)}">
+        <span class="po-idx">·</span><span class="po-en"></span>
+        <span class="po-name">${escapeHtml(p.name || p.identifier)}</span>
+        <span class="po-role">${p.marker === true || p.system_prompt === true ? '系统' : (ROLE_LABELS[p.role] || p.role || '—')}</span>
+        <span class="po-len">${p.content ? p.content.length + ' 字' : ''}</span>
+      </div>`);
+      row.addEventListener('click', () => {
+        ul.querySelectorAll('.preset-row').forEach((r) => r.classList.remove('sel'));
+        row.classList.add('sel');
+        renderPresetDetail(detail, p, p.identifier);
+      });
+      ul.appendChild(row);
+    });
+    wrap.appendChild(uCard);
+  }
+
+  // --- 内容详情 ---
+  const detailCard = el('<div class="form-card"><h4>提示词内容（点击上方条目查看）</h4><div class="preset-detail"><div class="empty" style="padding:14px">尚未选择</div></div></div>');
+  const detail = detailCard.querySelector('.preset-detail');
+  wrap.appendChild(detailCard);
+
+  // 汇总
+  const sumCard = el(`<div class="form-card"><h4>统计</h4><div class="param-grid">
+    <div class="param"><span>提示词总数</span><b>${prompts.length}</b></div>
+    <div class="param"><span>生效序列</span><b>${orderList.length}（启用 ${enabledCount}）</b></div>
+    <div class="param"><span>未排序</span><b>${unordered.length}</b></div>
+    <div class="param"><span>排序组</span><b>${orderGroups.length}</b></div>
+  </div></div>`);
+  wrap.appendChild(sumCard);
+
+  root.appendChild(wrap);
+}
+
+function renderPresetDetail(box, p, identifier) {
+  if (!p) {
+    box.innerHTML = `<div class="empty" style="padding:14px">提示词 "${escapeHtml(identifier)}" 在 prompts 列表中不存在（可能已被删除）</div>`;
+    return;
+  }
+  const isMarker = p.marker === true || p.system_prompt === true;
+  const meta = [];
+  if (p.role) meta.push('角色：' + (ROLE_LABELS[p.role] || p.role));
+  if (isMarker) meta.push('系统管理项');
+  if (p.injection_position === 1) meta.push('按深度注入 @ ' + (p.injection_depth ?? 0));
+  if (p.forbid_overrides) meta.push('禁止覆盖');
+  box.innerHTML = `
+    <div class="pd-head"><b>${escapeHtml(p.name || identifier)}</b>
+      <span class="chip accent">${escapeHtml(identifier)}</span></div>
+    <div class="pd-meta">${meta.map(escapeHtml).join(' · ') || '—'}</div>
+    <pre class="pd-content">${escapeHtml(p.content || '（空）')}</pre>`;
 }
 
 // ============ 原始 JSON / 文本编辑 ============
@@ -532,6 +772,19 @@ async function buildRawEditor(item, kind) {
       await api.saveText(item.id, raw.area.value);
       clearDirty();
       toast('已保存');
+      refreshItems();
+      refreshMeta();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
+  saveAsFn = async () => {
+    if (isJsonLike && !raw.validate()) {
+      toast('JSON 校验失败，无法另存', 'err');
+      return;
+    }
+    try {
+      const r = await api.saveTextAs(item.id, raw.area.value);
+      toast(`已另存为 ${r.fileName}`);
       refreshItems();
       refreshMeta();
     } catch (e) { toast(e.message, 'err'); }

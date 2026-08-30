@@ -35,6 +35,23 @@ public static class FileOperations
         return target;
     }
 
+    /// <summary>
+    /// 为"另存为"生成同目录下的自动命名路径："{原名}-副本 yyyy-MM-dd_HHmmss{扩展名}"，
+    /// 重名时追加序号。
+    /// </summary>
+    public static string GetSaveAsPath(string originalPath)
+    {
+        var dir = Path.GetDirectoryName(originalPath) ?? "";
+        var stem = Path.GetFileNameWithoutExtension(originalPath);
+        var ext = Path.GetExtension(originalPath);
+        var ts = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
+        var candidate = Path.Combine(dir, $"{stem}-副本 {ts}{ext}");
+        int n = 2;
+        while (File.Exists(candidate))
+            candidate = Path.Combine(dir, $"{stem}-副本 {ts} ({n++}){ext}");
+        return candidate;
+    }
+
     /// <summary>移动到某个库根下的相对目录（自动建目录）。</summary>
     public static string Move(LibraryItem item, string targetRoot, string relativeDir)
     {

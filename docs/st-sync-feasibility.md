@@ -1,0 +1,83 @@
+# 酒馆项目接入可行性分析
+
+> 目标：在酒馆资源管家里编辑的内容，直接同步生效于本机部署的两个酒馆项目——
+> 原版 SillyTavern（`D:\agent\SillyTavern`）与类酒馆项目 TauriTavern（`D:\agent\TauriTavern`）。
+
+## 一、两个项目的数据存放位置（已实测确认）
+
+| 资源类型 | SillyTavern | TauriTavern |
+|---|---|---|
+| 角色卡 | `data\default-user\characters\*.png`（现 15 个） | `cache\default-user\characters\`（现 14 个） |
+| 世界书 | `data\default-user\worlds\*.json`（21 个） | `cache\default-user\worlds\`（22 个） |
+| 对话预设 | `data\default-user\OpenAI Settings\*.json`（9 个） | `cache\default-user\OpenAI Settings\`（15 个） |
+| 界面主题 | `data\default-user\themes\*.json`（6 个） | `cache\default-user\themes\`（11 个） |
+| 正则脚本 | `data\default-user\regex\`（0 个） | `cache\default-user\regex\` |
+| 聊天记录 | `data\default-user\chats\`（**不接入**） | `cache\default-user\chats\`（**不接入**） |
+
+关键事实：
+
+1. **两者都是标准 SillyTavern 用户数据布局**。文件格式与本项目已支持的完全一致
+   （角色卡 PNG 内嵌 chara/ccv3、世界书 entries、预设 prompts+prompt_order、主题 JSON）。
+2. TauriTavern 是打包发行版：`default\` 是出厂主副本（内含 `!DO-NOT-EDIT-THESE-FILES.txt`，
+   明确禁止编辑），**运行时真正读写的是 `cache\default-user\`**。
+   ⚠️ 风险点：程序更新时 `cache` 可能被重置（从 default 重新展开），因此对 TT 目录的
+   一切写入必须依赖本项目的自动备份作为兜底。
+3. SillyTavern（Node）对数据文件是**按需从磁盘读取**，不长期独占文件锁；
+   TauriTavern（Tauri + 后端服务）同理。文件级外部写入在两个项目里都被支持——
+   这正是"酒馆外面改、酒馆里面生效"的基础。
+
+## 二、同步方向与语义
+
+"局外改 → 酒馆内同步" 本质是**单向写入**：Vault 直接读写酒馆目录中的文件本体。
+
+| Vault 内操作 | 酒馆内的表现 |
+|---|---|
+| 编辑角色卡/世界书/预设并保存 | 直接写回酒馆目录的原文件。角色卡在**下一次打开对话时**生效；世界书/预设/主题在酒馆界面**刷新列表或重新选择后**生效（ST 有内存缓存，通常无需重启） |
+| 在酒馆里新建/修改资源 | Vault 下次扫描（启动时自动/手动"重新扫描"）自动纳入索引 |
+| 删除（进回收站） | 酒馆内该资源消失（回收站可恢复） |
+| 重命名/移动 | ⚠️ 见下方约束 |
+
+## 三、推荐方案：A'（注册酒馆目录为受管库根 + 源标记 + 安全护栏）
+
+**不引入独立的同步引擎**，直接把两个酒馆的数据子目录注册为库根，因为文件格式已经 100% 兼容：
+
+```
+库根注册（接入向导一次性完成）：
+D:\agent\SillyTavern\data\default-user\characters      → 标记"酒馆源·ST·角色卡"
+D:\agent\SillyTavern\data\default-user\worlds          → 标记"酒馆源·ST·世界书"
+D:\agent\SillyTavern\data\default-user\OpenAI Settings → 标记"酒馆源·ST·预设"
+D:\agent\SillyTavern\data\default-user\themes          → 标记"酒馆源·ST·美化"
+D:\agent\TauriTavern\cache\default-user\…（同上四个）    → 标记"酒馆源·TT·…"
+```
+
+护栏（同步安全的核心，开发量小）：
+
+1. **酒馆源内禁止或警告整理类操作**：角色文件名被 chats 内对话引用，
+   重命名/移动角色卡会导致酒馆内对话失联 → 默认禁止，明确确认才放行，且走自动备份。
+2. **写入前自动备份强制开启**（本项目已有），TT 的 cache 目录因存在"更新重置"风险，
+   建议默认保留份数更高（如 10 份）。
+3. **接入向导**：设置页"接入酒馆"按钮 → 自动探测两个项目的安装位置（校验
+   `data\default-user` / `cache\default-user` 存在）→ 一键注册全部子目录。
+4. **chats / backups / User Avatars 等目录永不注册**（聊天记录格式不同且量大）。
+
+## 四、不推荐的方案（记录备查）
+
+- **方案 B：主库 + 显式导入/导出**（Vault 自有目录为唯一主库，逐条"推送/拉取"）：
+  隔离最干净，但每次同步都要手动操作，与"局外改完酒馆直接生效"的目标相悖，仅适合
+  未来做"发布到多个酒馆"的进阶需求。
+- **方案 C：调用酒馆内部 API**：ST 无完整文件管理 API；TauriTavern 的后端 API 未公开
+  稳定契约。文件级直连是唯一低风险路径。
+
+## 五、可行性结论
+
+| 评估项 | 结论 |
+|---|---|
+| 文件格式兼容 | ✅ 100%（两者即 ST 标准布局，本项目已支持全部格式） |
+| 写入被酒馆识别 | ✅ 按需读取模型，外部写入天然生效（个别列表需刷新） |
+| 文件锁冲突 | ✅ 基本无（Node/Tauri 均不长期持锁；写前已有原子替换） |
+| 更新重置风险（仅 TT） | ⚠️ 有 → 自动备份 + default 目录永不写入 |
+| 角色改名破坏对话引用 | ⚠️ 有 → 酒馆源内默认禁止移动/重命名 |
+| 开发量 | 小：目录探测 + 接入向导 + 源标记护栏，预计一次迭代 |
+
+**结论：可行，推荐方案 A'。** 本期已完成其安全基座（自动备份/还原、另存为副本），
+下一期实现"接入酒馆"向导与源标记护栏。

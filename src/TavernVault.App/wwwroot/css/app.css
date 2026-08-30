@@ -427,3 +427,41 @@ select:hover { color: var(--text); }
 
 /* 骨架 */
 .skeleton { border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); height: 210px; }
+
+/* ---------- 预设可视化（只读） ---------- */
+.param-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.param { background: var(--surface-2); border-radius: 8px; padding: 8px 11px; min-width: 0; }
+.param span { display: block; font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.param b { display: block; font-size: 12.5px; font-weight: 600; margin-top: 2px; word-break: break-all; }
+.preset-list { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow-y: auto; }
+.preset-row {
+  display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+  border-radius: 8px; cursor: pointer; font-size: 12.5px;
+}
+.preset-row:hover { background: var(--surface-2); }
+.preset-row.sel { background: var(--accent-weak); }
+.preset-row.off { opacity: .45; }
+.po-idx { flex: none; width: 26px; text-align: right; color: var(--text-3); font-size: 11px; }
+.po-en { flex: none; width: 14px; text-align: center; color: var(--ok); font-weight: 700; }
+.preset-row.off .po-en { color: var(--danger); }
+.po-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.po-role { flex: none; font-size: 10.5px; color: var(--text-2); background: var(--surface-2); border-radius: 5px; padding: 2px 7px; }
+.po-len { flex: none; width: 56px; text-align: right; font-size: 10.5px; color: var(--text-3); }
+.preset-detail { margin-top: 4px; }
+.pd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 13.5px; }
+.pd-meta { font-size: 11.5px; color: var(--text-3); margin-bottom: 10px; }
+.pd-content {
+  margin: 0; background: var(--surface-2); border-radius: 9px; padding: 12px 14px;
+  font-size: 12px; line-height: 1.65; white-space: pre-wrap; word-break: break-word;
+  max-height: 320px; overflow-y: auto;
+  font-family: inherit;
+}
+
+/* 备份列表 */
+.backup-list { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }
+.backup-item {
+  display: flex; align-items: center; gap: 10px; background: var(--surface-2);
+  border-radius: 8px; padding: 8px 12px; font-size: 12px;
+}
+.backup-item .b-time { flex: 1; font-weight: 600; }
+.backup-item .b-size { color: var(--text-3); font-size: 11px; }

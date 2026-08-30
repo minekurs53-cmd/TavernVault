@@ -15,7 +15,7 @@ function initTheme() {
 }
 
 // ---- 设置弹窗 ----
-export function showSettings() {
+export async function showSettings() {
   const roots = state.meta?.roots || [];
   const body = document.createElement('div');
   body.innerHTML = `
@@ -31,6 +31,12 @@ export function showSettings() {
       <button class="btn" id="set-root-pick"><span class="ico">${icon('folder')}</span>浏览…</button>
       <button class="btn primary" id="set-root-add">添加</button>
     </div>
+    <div class="m-section-title">备份</div>
+    <div class="toggle-row">
+      <label class="toggle"><input type="checkbox" id="set-autobackup"> 编辑/还原前自动备份原文件</label>
+    </div>
+    <div class="field" style="max-width:220px"><label>每个文件保留备份份数</label>
+      <input type="text" id="set-maxbackups" inputmode="numeric"></div>
     <div class="m-actions">
       <button class="btn" data-act="rescan"><span class="ico">${icon('refresh')}</span>重新扫描</button>
       <button class="btn primary" data-act="close">完成</button>
@@ -41,6 +47,22 @@ export function showSettings() {
 
   const mask = openModal(body);
   hydrateIcons(body);
+
+  // 备份设置回显与保存
+  const stats = await api.get('/api/backups/stats').catch(() => null);
+  const autoCb = body.querySelector('#set-autobackup');
+  const maxInput = body.querySelector('#set-maxbackups');
+  if (stats) {
+    autoCb.checked = !!stats.autoBackup;
+    maxInput.value = stats.maxPerFile;
+  }
+  const saveBackupSettings = async () => {
+    const max = Math.min(50, Math.max(1, parseInt(maxInput.value, 10) || 5));
+    maxInput.value = max;
+    await api.post('/api/settings/backup', { autoBackup: autoCb.checked, maxPerFile: max }).catch(() => {});
+  };
+  autoCb.addEventListener('change', saveBackupSettings);
+  maxInput.addEventListener('change', saveBackupSettings);
 
   const renderRoots = () => {
     const box = body.querySelector('.root-list');

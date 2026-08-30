@@ -23,6 +23,9 @@ public sealed class Vault
     private readonly SettingsStore _store;
     private readonly LibraryScanner _scanner = new();
 
+    /// <summary>文件级备份（编辑/还原前自动备份）。</summary>
+    public BackupStore Backups { get; }
+
     public AppSettings Settings { get; private set; }
     public DateTime LastScanAt { get; private set; }
 
@@ -31,6 +34,15 @@ public sealed class Vault
         _store = store ?? new SettingsStore();
         Settings = _store.LoadSettings();
         Items = _store.LoadIndex();
+        Backups = new BackupStore(_store.DataDir) { MaxPerFile = Settings.MaxBackupsPerFile };
+    }
+
+    /// <summary>若开启自动备份，在覆盖写入前调用；失败不抛出。</summary>
+    public void BackupBeforeWrite(string fullPath)
+    {
+        if (!Settings.AutoBackup) return;
+        Backups.MaxPerFile = Math.Max(1, Settings.MaxBackupsPerFile);
+        Backups.BackupBeforeWrite(fullPath);
     }
 
     public List<LibraryItem> Items { get; private set; } = [];

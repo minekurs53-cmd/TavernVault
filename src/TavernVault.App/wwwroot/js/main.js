@@ -267,7 +267,7 @@ async function boot() {
   $('#btn-rescan').addEventListener('click', doRescan);
   $('#btn-settings').addEventListener('click', showSettings);
   $('#filter-clear').addEventListener('click', () => {
-    Object.assign(state.filter, { kind: null, tag: null, fav: false, q: '', root: null });
+    Object.assign(state.filter, { kind: null, tag: null, fav: false, q: '', dir: null, root: null });
     $('#search').value = '';
     refreshItems();
   });
@@ -276,6 +276,15 @@ async function boot() {
     // 启动时自动重扫，保证索引与磁盘一致（小库瞬间完成）
     await api.rescan();
     await refreshMeta();
+    // 恢复上次所在库（校验合法性，非法立即回写）
+    const LIB_KEYS = ['normal', 'tavernST', 'tavernTT'];
+    const saved = localStorage.getItem('tv-library');
+    if (LIB_KEYS.includes(saved)) {
+      state.filter.library = saved;
+    } else {
+      localStorage.setItem('tv-library', 'normal');
+      state.filter.library = 'normal';
+    }
     updateVersion();
     updateScanInfo();
     renderSidebar();

@@ -39,6 +39,32 @@ def check(name, cond, extra=""):
         print(f"  FAIL {name} {extra}")
 
 
+# ---- 夹具：创建 testdata 临时库根并注册（脚本自足，不依赖手动准备） ----
+import os
+
+TESTDATA = os.path.abspath("testdata")
+os.makedirs(TESTDATA, exist_ok=True)
+with open(os.path.join(TESTDATA, "测试卡.json"), "w", encoding="utf-8") as f:
+    json.dump({
+        "spec": "chara_card_v2",
+        "avatar": "none", "create_date": "2025-1-1",  # 未知键：验证无损编辑
+        "data": {
+            "name": "测试卡", "description": "原始描述", "personality": "冷静",
+            "character_book": {  # Spec V2 内嵌书：验证 V2→ST 映射、raw 保形合并
+                "entries": [{"keys": ["内置词"], "content": "内容", "comment": "内嵌条目",
+                             "enabled": True, "insertion_order": 50, "position": "before_char",
+                             "id": 42, "selective": True, "extensions": {}}],
+            },
+        },
+    }, f, ensure_ascii=False)
+with open(os.path.join(TESTDATA, "测试书.json"), "w", encoding="utf-8") as f:
+    json.dump({
+        "entries": {"0": {"key": ["词"], "content": "内容", "comment": "条目一",
+                          "constant": False, "disable": False, "order": 1,
+                          "position": 0, "depth": 4, "probability": 100}},
+    }, f, ensure_ascii=False)
+call("POST", "/api/roots", {"path": TESTDATA})
+
 print("== 预扫描 ==")
 r = call("POST", "/api/rescan")
 check("重扫成功", r is not None and r.get("count", 0) > 0, str(r))
@@ -197,6 +223,42 @@ r = call("POST", f"/api/items/{guard_id}/move", {"root": "C:\\Windows", "dir": "
 check("越权 root 被拒绝", r is not None and "error" in r)
 r = call("POST", f"/api/items/{guard_id}/move", {"root": "D:\\agent\\TavernVault\\testdata", "dir": "归档2"})
 check("库内移动正常", r is not None and r.get("ok") is True)
+
+print("== 三逻辑库（v0.4.2）==")
+meta = call("GET", "/api/meta")
+libs = meta.get("libraries") or []
+check("libraries 存在三库", {l.get("key") for l in libs} == {"normal", "tavernST", "tavernTT"})
+check("每库键齐全", all(
+    all(k in l for k in ("key", "label", "total", "rootCount", "favorites", "kinds", "dirs", "tags"))
+    for l in libs))
+check("每库 kinds 8 类", all(len(l["kinds"]) == 8 for l in libs))
+check("库内不变量 Σkinds==total", all(sum(k["count"] for k in l["kinds"]) == l["total"] for l in libs))
+check("全局 total==Σ库 total", sum(l["total"] for l in libs) == meta["total"])
+roots_by_source = {}
+for r in meta.get("roots") or []:
+    roots_by_source[r.get("source", "normal")] = roots_by_source.get(r.get("source", "normal"), 0) + 1
+check("rootCount 与 roots 一致", all(
+    l["rootCount"] == roots_by_source.get(l["key"], 0) for l in libs))
+# 酒馆根未接入时应查零；接入后 dirs 含空根占位
+st_items = call("GET", "/api/items?source=tavernST")
+st_lib = next(l for l in libs if l["key"] == "tavernST")
+check("tavernST 过滤与 meta 一致", len(st_items) == st_lib["total"])
+if st_lib["rootCount"] == 0:
+    check("未接入酒馆库查零", len(st_items) == 0)
+normal_items = call("GET", "/api/items?source=normal")
+check("source=normal 全部 rootSource==0", all(i["rootSource"] == 0 for i in normal_items))
+combo = call("GET", "/api/items?source=normal&kind=character")
+all_char = call("GET", "/api/items?kind=character")
+check("source+kind 组合是子集", 0 < len(combo) <= len(all_char)
+      if all_char else len(combo) == 0)
+bad = call("GET", "/api/items?source=bogus")
+check("非法 source 返回 400", isinstance(bad, dict) and bad.get("error") == "无效的库来源")
+# dirs 闭环：普通库第一个目录的 count 与查询一致
+normal_lib = next(l for l in libs if l["key"] == "normal")
+if normal_lib["dirs"]:
+    d0 = normal_lib["dirs"][0]
+    q = call("GET", "/api/items?source=normal&dir=" + urllib.parse.quote(d0["dir"]))
+    check("dirs 闭环（dir 查询==计数）", len(q) == d0["count"])
 
 print(f"\n结果：{ok_count} 通过，{fail_count} 失败")
 sys.exit(1 if fail_count else 0)

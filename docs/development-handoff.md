@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.4.1（工作区，未提交）** · 最后更新：2026-08-31
+> 当前版本：**v0.4.2（工作区，未提交）** · 最后更新：2026-08-31
 
 ---
 
@@ -161,13 +161,17 @@ App：
   请求体带 `force:true` 才放行（前端弹风险确认框）。写前强制备份 + TT 高保留份数兜底。
 - **默认库**：首次运行 `EnsureDefaultRoot` 自动把 `D:\agent\酒馆PR`（或 `%USERPROFILE%\酒馆PR`）注册为普通库。
 
-### 3.8 库根分组浏览（v0.4.1）
+### 3.8 三逻辑库选项卡（v0.4.1 → v0.4.2）
 
-接入酒馆后，多个库根的文件会混在一个列表里。v0.4.1 的解法：
+v0.4.1 引入库根分组（侧栏逐根列出），但接入酒馆后每个酒馆注册 5 个根（characters/worlds/OpenAI Settings/themes/regex），加局外普通根共 11+ 个平铺，且类型计数仍是全局的——文件管理依然混乱。v0.4.2 重构为**三个逻辑库选项卡，互相独立**：
 
-- `QueryParams.RootPath` 过滤条目（大小写不敏感的库根精确匹配）；
-- `/api/meta` 与 `/api/roots` 返回的每个根带 `count`（该根条目数）；
-- 前端侧栏"库"分区按根列出（ST 蓝 / TT 绿徽标），点击即筛选该库内容，顶部筛选栏显示当前库。
+- **逻辑库 = 库根来源的并集**：局外存储（全部 Normal 根）/ SillyTavern（全部 TavernST 根）/ TauriTavern（全部 TavernTT 根）。无「全部资源」总览，默认进入局外存储。
+- **`Vault.BuildLibraries()`**（Core 层，可单测）聚合每库的 `total/rootCount/favorites/kinds(8 类含 0)/dirs/tags`：普通库 dirs 按 `RelativeDir` 跨根聚合（root=null），酒馆库 dirs 按注册根逐条列出（含空根 count=0）。`/api/meta` 纯增量加 `libraries` 键；全局 `kinds` 改为三库求和；全局 `roots/userTags` 保留（设置弹窗与移动弹窗依赖含空根的完整根清单）。
+- **`QueryParams.Source`**：按来源过滤，与 `RootPath` 同设为 AND。`/api/items?source=` **严格契约**：非 {normal,tavernST,tavernTT} 返回 400，绝不静默当作 Normal。
+- **切库重置契约**：切库重置 `kind/dir/root/tag`，保留 `q/fav/sort`。**筛选不持久化**（刷新即重置）；唯一持久化键 `localStorage('tv-library')`，启动时校验 ∈ 三值，非法**立即回写** normal。
+- **二级子目录**：酒馆库二级用 `root` 参数（`RelativeDir` 相对各根，characters 根与 worlds 根的顶层文件 RelativeDir 均为 `""`，dir 参数无法区分功能分区）；普通库二级用 `dir` 参数。均与 `source` AND 叠加。
+- **空态优先级**：`rootCount===0` → 引导（Normal「添加根目录」/ 酒馆「一键接入」，都开库设置）；`rootCount>0 && total===0` → 建议重扫；有筛选无结果 → 筛选空态。
+- **冷升级自愈**：增量复用分支无条件刷新 `RootSource`（LibraryScanner.cs:76）+ 前端 boot 每次启动 rescan（main.js），但 `--server` 冷启动与手改索引不会被覆盖。`Vault` 构造时校验 `RootContaining(FullPath)?.Source != item.RootSource` 即触发一次 Rescan（O(n×roots)），兜住来源漂移。
 
 ---
 
@@ -177,9 +181,9 @@ App：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/meta` | 总数、分类计数、用户标签、roots（含来源与 count）、版本号 |
+| GET | `/api/meta` | 总数、分类计数（三库求和）、用户标签、roots（含来源与 count）、**libraries（三逻辑库聚合：total/rootCount/favorites/kinds/dirs/tags）**、版本号 |
 | POST | `/api/rescan` | 全量重扫，返回条目数 |
-| GET | `/api/items` | 条目查询。参数：`kind,q,tag,fav,sort(name|modified|size|kind),dir,root` |
+| GET | `/api/items` | 条目查询。参数：`kind,q,tag,fav,sort(name|modified|size|kind),dir,root,source`。**source 非法值 400**，与 root AND |
 | GET | `/api/items/{id}` | 单条目 |
 | GET | `/api/thumb/{id}` | 角色卡缩略图（JPEG） |
 | GET | `/api/image/{id}` | 角色卡原图 PNG（支持 Range） |
@@ -280,12 +284,12 @@ dotnet build TavernVault.slnx -c Release
 
 | 层级 | 命令 / 入口 | 数量 | 说明 |
 |---|---|---|---|
-| 单元测试 | `dotnet test TavernVault.slnx -c Release` | 36 项 | PNG 块、内嵌书映射、备份/另存为/自定义备份位置、增量扫描、用户数据迁移 |
-| API 冒烟 | `python tests/smoke_api.py` | 49 项 | 先 `--server --port=47999 --data=<临时目录>` 再跑；注册临时 `testdata/` 做写测试，跑完删除 |
+| 单元测试 | `dotnet test TavernVault.slnx -c Release` | 41 项 | PNG 块、内嵌书映射、备份/另存为/自定义备份位置、增量扫描、用户数据迁移、**来源过滤与 BuildLibraries 聚合（VaultQueryTests，含冷升级自愈）** |
+| API 冒烟 | `python tests/smoke_api.py` | 61 项 | **夹具自足（脚本自建 testdata 并注册）**；先 `--server --port=47999 --data=<临时目录>` 再跑；**写操作只作用于 testdata** |
 | UI 冒烟 | 浏览器自动化打开 `http://127.0.0.1:47999/` | — | 页面加载失败时读 `window.__errs`（index.html 内置探针）；截图存 `ui-shots/`（已 gitignore） |
 | 真实库验证 | `GET` 任意端点 | — | 只读核对可以，**绝不对真实库 PUT/POST** |
 
-单元测试文件分布：CharacterBookTests(10)、CardAndDetectionTests(9)、BackupAndSaveAsTests(6)、PngChunkIOTests(5)、ScannerAndFileOpsTests(5)、UnitTest1(1)。
+单元测试文件分布：CharacterBookTests(10)、CardAndDetectionTests(9)、VaultQueryTests(5)、BackupAndSaveAsTests(6)、PngChunkIOTests(5)、ScannerAndFileOpsTests(5)、UnitTest1(1)。
 
 ---
 
@@ -300,13 +304,14 @@ dotnet build TavernVault.slnx -c Release
 | v0.3.0 | 另存为 + 备份 | 另存为（自动命名 `原名-副本 yyyy-MM-dd_HHmmss`）；备份与还原；预设可视化一期（只读）；`docs/st-sync-feasibility.md` |
 | v0.3.1 | 打磨 | 库设置修复；Esc 兜底关弹窗；左下角版本号；预设可视化二期（采样参数/生效顺序/提示词详情可编辑）；csproj 确定性拷贝 |
 | v0.4.0 | 酒馆接入 | 库根模型对象化 `{Path,Source}`+旧设置自动迁移（索引 2→3）；`TavernDetector`；`/api/tavern/detect+connect`；酒馆源重命名/移动 403 护栏（`force` 覆盖）；酒馆源强制备份、TT 保留 10 份；前端接入向导+来源徽章 |
-| **v0.4.1（当前工作区）** | **多库管理 + 备份位置** | 侧栏"库"分组选项卡（按库根浏览，解决接入酒馆后文件重复混乱）；备份位置自定义（`BackupRootPath` 设置 + `RelocateTo` 整体迁移 + 绝对路径校验）；项目文档体系升级（本文档 + 架构图集 + 速查手册）；单元测试 34→36 |
+| v0.4.1 | **多库管理 + 备份位置** | 侧栏"库"分组选项卡（按库根浏览）；备份位置自定义（`BackupRootPath` + `RelocateTo` 整体迁移 + 绝对路径校验）；项目文档体系升级；单元测试 34→36 |
+| **v0.4.2（当前工作区）** | **三逻辑库选项卡** | 侧栏重构为三个独立逻辑库（局外存储/SillyTavern/TauriTavern，来源并集）；每库独立类型计数 + 二级子目录导航（酒馆库按功能分区根）；`Vault.BuildLibraries` 聚合 + `QueryParams.Source` 过滤（非法 source 400）；移动弹窗按来源分组；构造时来源漂移自愈；单测 36→41、冒烟 49→61（**夹具自足**） |
 
 ### 9.2 当前状态（截至 2026-08-31）
 
-- 分支 `qoder/TavernVault`，最新提交 `66c2781`（v0.4.0）。
-- **工作区有 9 个未提交文件**（即 v0.4.1 全部改动）：`ApiServer.cs`、`TavernVault.App.csproj`（版本号）、`index.html`（缓存版本参数）、`app.js`、`main.js`、`AppSettings.cs`、`BackupStore.cs`、`Vault.cs`、`BackupAndSaveAsTests.cs`。**待提交。**
-- v0.4.1 验证情况：Release 构建 0 错误；36/36 单测通过；API 冒烟（库根过滤、备份 stats、备份位置迁移往返、相对路径 400 拒绝、空值重置）与 UI 冒烟（侧栏库分组渲染、根点击过滤、备份位置设置回显）均通过。
+- 分支 `qoder/TavernVault`，最新提交为 v0.4.1。
+- **工作区有 10 个未提交文件**（即 v0.4.2 全部改动）：`ApiServer.cs`、`TavernVault.App.csproj`（0.4.2）、`index.html`、`app.css`、`app.js`、`main.js`、`Vault.cs`、`smoke_api.py`（修改）+ `LibraryInfo.cs`、`VaultQueryTests.cs`（新增）。**待提交。**
+- v0.4.2 验证情况：Release 构建 0 警告 0 错误；41/41 单测通过；61/61 冒烟通过（含三逻辑库 12 项）；浏览器 UI 清单 7 项通过（三 tab 常显、切库重置/保留契约、tv-library 非法回写、两类空态引导、二级子目录与组合过滤、移动弹窗分组、0 JS 错误）。
 
 ### 9.3 Git 信息
 
@@ -330,8 +335,7 @@ dotnet build TavernVault.slnx -c Release
 
 ### 未完成（当前收尾项）
 
-- [ ] **提交 v0.4.1**（9 个文件已验证，待用户确认后 commit；推送走代理 (端口)）
-- [ ] 冒烟脚本 `smoke_api.py` 尚未覆盖 v0.4.1 新端点行为（库根过滤、备份位置迁移），目前靠手工冒烟验证
+- [ ] **提交 v0.4.2**（10 个文件已验证，待用户确认后 commit；推送走代理 (端口)）
 
 ### 近期方向（下一两个迭代）
 
@@ -361,4 +365,4 @@ dotnet build TavernVault.slnx -c Release
 
 ---
 
-**文档版本**：2.0（由交接文档升级为技术文档） · **最后更新**：2026-08-31 · 对应程序版本 v0.4.1
+**文档版本**：2.1 · **最后更新**：2026-08-31 · 对应程序版本 v0.4.2

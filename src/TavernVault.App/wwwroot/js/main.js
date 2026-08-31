@@ -1,6 +1,6 @@
 // 入口：主题、初始化、设置弹窗
 
-import { api } from './api.js';
+import { api, get, post } from './api.js';
 import { $, icon, hydrateIcons, toast, escapeHtml, openModal, confirmDialog } from './util.js';
 import { state, initShell, refreshItems, refreshMeta, renderSidebar } from './app.js';
 
@@ -49,7 +49,7 @@ export async function showSettings() {
   hydrateIcons(body);
 
   // 备份设置回显与保存
-  const stats = await api.get('/api/backups/stats').catch(() => null);
+  const stats = await get('/api/backups/stats').catch(() => null);
   const autoCb = body.querySelector('#set-autobackup');
   const maxInput = body.querySelector('#set-maxbackups');
   if (stats) {
@@ -59,7 +59,7 @@ export async function showSettings() {
   const saveBackupSettings = async () => {
     const max = Math.min(50, Math.max(1, parseInt(maxInput.value, 10) || 5));
     maxInput.value = max;
-    await api.post('/api/settings/backup', { autoBackup: autoCb.checked, maxPerFile: max }).catch(() => {});
+    await post('/api/settings/backup', { autoBackup: autoCb.checked, maxPerFile: max }).catch(() => {});
   };
   autoCb.addEventListener('change', saveBackupSettings);
   maxInput.addEventListener('change', saveBackupSettings);
@@ -120,6 +120,11 @@ export async function showSettings() {
   });
 }
 
+function updateVersion() {
+  const v = state.meta?.version;
+  $('#app-version').textContent = v ? 'v' + v : '';
+}
+
 export async function doRescan() {
   const btn = $('#btn-rescan');
   btn.style.pointerEvents = 'none';
@@ -127,6 +132,7 @@ export async function doRescan() {
   try {
     const r = await api.rescan();
     await refreshMeta();
+    updateVersion();
     await refreshItems();
     toast(`扫描完成，共 ${r.count} 个资源`);
   } catch (e) {
@@ -164,6 +170,7 @@ async function boot() {
     // 启动时自动重扫，保证索引与磁盘一致（小库瞬间完成）
     await api.rescan();
     await refreshMeta();
+    updateVersion();
     updateScanInfo();
     renderSidebar();
     await refreshItems();

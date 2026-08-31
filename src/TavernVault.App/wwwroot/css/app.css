@@ -433,6 +433,12 @@ select:hover { color: var(--text); }
 .param { background: var(--surface-2); border-radius: 8px; padding: 8px 11px; min-width: 0; }
 .param span { display: block; font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .param b { display: block; font-size: 12.5px; font-weight: 600; margin-top: 2px; word-break: break-all; }
+.param input[type=text] {
+  width: 100%; margin-top: 5px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 8px; font-size: 12px; outline: none; min-width: 0;
+}
+.param input[type=text]:focus { border-color: var(--accent); }
+.param .toggle { margin-top: 7px; }
 .preset-list { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow-y: auto; }
 .preset-row {
   display: flex; align-items: center; gap: 10px; padding: 6px 10px;
@@ -448,7 +454,6 @@ select:hover { color: var(--text); }
 .po-role { flex: none; font-size: 10.5px; color: var(--text-2); background: var(--surface-2); border-radius: 5px; padding: 2px 7px; }
 .po-len { flex: none; width: 56px; text-align: right; font-size: 10.5px; color: var(--text-3); }
 .preset-detail { margin-top: 4px; }
-.pd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 13.5px; }
 .pd-meta { font-size: 11.5px; color: var(--text-3); margin-bottom: 10px; }
 .pd-content {
   margin: 0; background: var(--surface-2); border-radius: 9px; padding: 12px 14px;
@@ -456,6 +461,23 @@ select:hover { color: var(--text); }
   max-height: 320px; overflow-y: auto;
   font-family: inherit;
 }
+.pd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 13.5px; }
+.pd-name {
+  flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid transparent;
+  border-radius: 7px; padding: 6px 10px; font-size: 13px; font-weight: 600; outline: none;
+}
+.pd-name:focus { border-color: var(--accent); background: var(--surface); }
+.pd-name:disabled { opacity: .6; }
+.pd-edit { width: 100%; resize: vertical; min-height: 180px; outline: none; border: 1px solid transparent; }
+.pd-edit:focus { border-color: var(--accent); }
+.pd-edit:disabled { opacity: .65; }
+.pd-inject { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; font-size: 12px; color: var(--text-2); }
+.pd-inject select, .pd-inject input[type=text] {
+  background: var(--surface-2); border: 1px solid transparent; border-radius: 6px;
+  padding: 4px 8px; outline: none; color: var(--text); font-size: 12px;
+}
+.pd-inject .pd-depth { width: 56px; }
+.po-cb { flex: none; width: 14px; height: 14px; accent-color: var(--accent); }
 
 /* 备份列表 */
 .backup-list { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }

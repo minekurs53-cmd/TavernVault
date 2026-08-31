@@ -492,7 +492,7 @@ async function buildLoreEditor(item, opts = {}) {
   };
 }
 
-// ============ 预设可视化（B 计划一期：只读） ============
+// ============ 预设可视化（B 计划二期：参数/开关/内容可编辑） ============
 
 const SAMPLER_LABELS = {
   temperature: '温度', frequency_penalty: '频率惩罚', presence_penalty: '存在惩罚',
@@ -505,23 +505,38 @@ const SAMPLER_LABELS = {
   continue_postfix: '续写后缀', continue_nudge_prompt: '续写提示',
   impersonation_prompt: '扮演提示', new_chat_prompt: '新对话提示',
   new_group_chat_prompt: '新群聊提示', new_example_chat_prompt: '新示例提示',
-  continue_nudge: '续写推动', bias_preset_selected: '偏好预设',
-  function_calling: '函数调用', show_thoughts: '显示思考',
-  reasoning_effort: '推理力度', enable_web_search: '联网搜索',
-  request_images: '请求图片', image_inlining: '图片内联',
-  assistant_prefill: '助手预填充', assistant_impersonation: '助手扮演预填充',
-  claude_use_sysprompt: 'Claude 系统提示', prompt_instructions: '指令提示',
-  prompt_order: '生效顺序', prompts: '提示词列表',
-  utility_prompts: '工具提示词', regex: '正则',
+  bias_preset_selected: '偏好预设', function_calling: '函数调用',
+  show_thoughts: '显示思考', reasoning_effort: '推理力度',
+  enable_web_search: '联网搜索', request_images: '请求图片',
+  image_inlining: '图片内联', inline_image_quality: '图片质量',
+  assistant_prefill: '助手预填充', claude_use_sysprompt: 'Claude 系统提示',
+  seed: '随机种子', n: '候选数', verbosity: '输出详细度',
+  use_sysprompt: '使用系统提示', media_inlining: '媒体内联',
+  prompts_usage: '提示词用法', maxattachments: '最大附件数',
 };
+
+// 常用参数优先展示的顺序，其余标量键按原顺序排在后面
+const SAMPLER_ORDER = [
+  'openai_model', 'temperature', 'frequency_penalty', 'presence_penalty',
+  'top_p', 'top_k', 'top_a', 'min_p', 'repetition_penalty',
+  'openai_max_tokens', 'openai_max_context', 'max_context_unlocked',
+  'stream_openai', 'squash_system_messages', 'names_behavior',
+  'reasoning_effort', 'show_thoughts', 'function_calling',
+  'enable_web_search', 'continue_prefill', 'wrap_in_quotes', 'seed',
+];
 
 const ROLE_LABELS = { system: '系统', user: '用户', assistant: 'AI' };
 
-// 预设可视化视图：采样参数总览 + 按 prompt_order 解析的生效顺序 + 内容查看
+function tryParseJson(text) {
+  try {
+    const v = JSON.parse(text);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch { return null; }
+}
+
 async function buildPresetEditor(item) {
-  const { content } = await api.text(item.id);
-  let preset;
-  try { preset = JSON.parse(content); } catch { preset = null; }
+  let { content } = await api.text(item.id);
+  let preset = tryParseJson(content);
 
   const tabs = $('#editor-tabs');
   tabs.hidden = false;
@@ -536,160 +551,338 @@ async function buildPresetEditor(item) {
   body.appendChild(visualView);
   body.appendChild(rawView);
 
-  // ---- 原文视图 ----
   const raw = buildRawArea(content, { json: true, flex: true });
   rawView.appendChild(raw.root);
   bindDirty(rawView);
 
-  // ---- 可视化视图（只读）----
-  if (preset) renderPresetVisual(visualView, preset);
-  else visualView.appendChild(el('<div class="empty">JSON 解析失败，请使用原文视图修正</div>'));
-
   let visualActive = true;
+  let rawStale = false; // 可视化侧有改动，原文文本已过期
+
+  function touch() { rawStale = true; markDirty(); }
+
+  // ---------- 可视化渲染 ----------
+  function renderVisual() {
+    visualView.innerHTML = '';
+    if (!preset) {
+      visualView.appendChild(el('<div class="empty">JSON 解析失败，请使用原文视图修正</div>'));
+      return;
+    }
+    visualView.appendChild(buildParamsCard());
+    visualView.appendChild(buildOrderCard());
+    const extra = buildUnorderedCard();
+    if (extra) visualView.appendChild(extra);
+    visualView.appendChild(buildDetailCard());
+    visualView.appendChild(buildStatsCard());
+  }
+
+  function scalarEntries() {
+    const keys = Object.keys(preset).filter((k) => {
+      const v = preset[k];
+      return (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
+        && !k.startsWith('_');
+    });
+    keys.sort((a, b) => {
+      const ia = SAMPLER_ORDER.indexOf(a), ib = SAMPLER_ORDER.indexOf(b);
+      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    });
+    return keys.map((k) => [k, preset[k]]);
+  }
+
+  function buildParamsCard() {
+    const card = el('<div class="form-card"><h4>采样与生成参数</h4><div class="param-grid"></div></div>');
+    const grid = card.querySelector('.param-grid');
+    for (const [k, v] of scalarEntries()) {
+      const label = SAMPLER_LABELS[k] || k;
+      const cell = el(`<div class="param" title="${escapeHtml(k)}"><span>${escapeHtml(label)}</span></div>`);
+      const original = v;
+      let input;
+      if (typeof original === 'boolean') {
+        input = el(`<label class="toggle"><input type="checkbox"> <span>${original ? '开' : '关'}</span></label>`);
+        const cb = input.querySelector('input');
+        cb.checked = original;
+        cb.addEventListener('change', () => {
+          preset[k] = cb.checked;
+          input.querySelector('span').textContent = cb.checked ? '开' : '关';
+          touch();
+        });
+      } else {
+        input = el(`<input type="text" spellcheck="false">`);
+        input.value = String(original);
+        input.addEventListener('change', () => {
+          if (typeof original === 'number') {
+            const n = parseFloat(input.value);
+            if (!Number.isFinite(n)) {
+              toast(`“${label}”需要数字，已还原`, 'err');
+              input.value = String(original);
+              return;
+            }
+            preset[k] = n;
+            input.value = String(n);
+          } else {
+            const t = input.value.trim();
+            if (!t) { preset[k] = ''; input.value = ''; }
+            else { preset[k] = t; input.value = t; }
+          }
+          touch();
+        });
+      }
+      cell.appendChild(input);
+      grid.appendChild(cell);
+    }
+    return card;
+  }
+
+  function getOrder() {
+    const groups = Array.isArray(preset.prompt_order) ? preset.prompt_order : [];
+    const group = groups.find((g) => g.character_id === 100001) || groups[0];
+    return { group, orderList: Array.isArray(group?.order) ? group.order : [] };
+  }
+
+  function buildOrderCard() {
+    const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
+    const byId = new Map(prompts.map((p) => [p.identifier, p]));
+    const { orderList } = getOrder();
+
+    const card = el('<div class="form-card"><h4>生效顺序（prompt_order · 默认角色，勾选 = 启用）</h4><div class="preset-list"></div></div>');
+    const list = card.querySelector('.preset-list');
+
+    orderList.forEach((o, idx) => {
+      const p = byId.get(o.identifier);
+      const isMarker = p?.marker === true || p?.system_prompt === true;
+      const name = p?.name || o.identifier;
+      const role = isMarker ? '系统' : (p?.role ? (ROLE_LABELS[p.role] || p.role) : '—');
+      const len = p?.content ? p.content.length : 0;
+
+      const row = el(`<div class="preset-row ${o.enable ? '' : 'off'}">
+        <span class="po-idx">${idx + 1}</span>
+        <input type="checkbox" class="po-cb" title="启用/禁用">
+        <span class="po-name">${escapeHtml(name)}</span>
+        <span class="po-role">${role}</span>
+        <span class="po-len">${len ? len + ' 字' : ''}</span>
+      </div>`);
+      const cb = row.querySelector('.po-cb');
+      cb.checked = !!o.enabled;
+      cb.addEventListener('change', () => {
+        o.enabled = cb.checked;
+        row.classList.toggle('off', !cb.checked);
+        touch();
+        updateStats();
+      });
+      row.addEventListener('click', (e) => {
+        if (e.target === cb) return;
+        list.querySelectorAll('.preset-row').forEach((r) => r.classList.remove('sel'));
+        row.classList.add('sel');
+        renderPresetDetail(p, o.identifier, (newName, newLen) => {
+          row.querySelector('.po-name').textContent = newName || o.identifier;
+          row.querySelector('.po-len').textContent = newLen ? newLen + ' 字' : '';
+        });
+      });
+      list.appendChild(row);
+    });
+    return card;
+  }
+
+  function buildUnorderedCard() {
+    const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
+    const { orderList } = getOrder();
+    const orderedIds = new Set(orderList.map((o) => o.identifier));
+    const unordered = prompts.filter((p) => !orderedIds.has(p.identifier));
+    if (!unordered.length) return null;
+
+    const card = el('<div class="form-card"><h4>未加入生效序列的提示词</h4><div class="preset-list"></div></div>');
+    const list = card.querySelector('.preset-list');
+    unordered.forEach((p) => {
+      const isMarker = p.marker === true || p.system_prompt === true;
+      const row = el(`<div class="preset-row">
+        <span class="po-idx">·</span>
+        <span class="po-cb"></span>
+        <span class="po-name">${escapeHtml(p.name || p.identifier)}</span>
+        <span class="po-role">${isMarker ? '系统' : (ROLE_LABELS[p.role] || p.role || '—')}</span>
+        <span class="po-len">${p.content ? p.content.length + ' 字' : ''}</span>
+      </div>`);
+      row.addEventListener('click', () => {
+        list.querySelectorAll('.preset-row').forEach((r) => r.classList.remove('sel'));
+        row.classList.add('sel');
+        renderPresetDetail(p, p.identifier, (newName, newLen) => {
+          row.querySelector('.po-name').textContent = newName || p.identifier;
+          row.querySelector('.po-len').textContent = newLen ? newLen + ' 字' : '';
+        });
+      });
+      list.appendChild(row);
+    });
+    return card;
+  }
+
+  function buildDetailCard() {
+    const card = el('<div class="form-card"><h4>提示词内容（点击上方条目编辑）</h4><div class="preset-detail"><div class="empty" style="padding:14px">尚未选择</div></div></div>');
+    detailBox = card.querySelector('.preset-detail');
+    return card;
+  }
+
+  function buildStatsCard() {
+    const card = el('<div class="form-card"><h4>统计</h4><div class="param-grid stats-grid"></div></div>');
+    statsGrid = card.querySelector('.stats-grid');
+    updateStats();
+    return card;
+  }
+
+  let detailBox = null;
+  let statsGrid = null;
+
+  function updateStats() {
+    if (!statsGrid) return;
+    const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
+    const { orderList } = getOrder();
+    const orderedIds = new Set(orderList.map((o) => o.identifier));
+    const enabled = orderList.filter((o) => o.enabled).length;
+    const unordered = prompts.filter((p) => !orderedIds.has(p.identifier)).length;
+    const groups = Array.isArray(preset.prompt_order) ? preset.prompt_order.length : 0;
+    statsGrid.innerHTML = `
+      <div class="param"><span>提示词总数</span><b>${prompts.length}</b></div>
+      <div class="param"><span>生效序列</span><b>${orderList.length}（启用 ${enabled}）</b></div>
+      <div class="param"><span>未排序</span><b>${unordered}</b></div>
+      <div class="param"><span>排序组</span><b>${groups}</b></div>`;
+  }
+
+  function renderPresetDetail(p, identifier, onRowUpdate) {
+    if (!detailBox) return;
+    if (!p) {
+      detailBox.innerHTML = `<div class="empty" style="padding:14px">提示词 "${escapeHtml(identifier)}" 在 prompts 列表中不存在（可能已被删除）</div>`;
+      return;
+    }
+    const isMarker = p.marker === true || p.system_prompt === true;
+    detailBox.innerHTML = `
+      <div class="pd-head">
+        <input class="pd-name" placeholder="名称" ${isMarker ? 'disabled title="系统管理项"' : ''}>
+        <span class="chip accent">${escapeHtml(identifier)}</span>
+      </div>
+      <div class="pd-meta"></div>
+      ${!isMarker ? `
+      <div class="pd-inject">
+        <label>注入：
+          <select class="pd-pos">
+            <option value="relative">相对位置</option>
+            <option value="depth">按深度</option>
+          </select>
+        </label>
+        <label class="pd-depth-wrap" hidden>深度 <input type="text" class="pd-depth"></label>
+        <label class="toggle" style="margin-left:auto"><input type="checkbox" class="pd-fobid"> 禁止覆盖</label>
+      </div>` : ''}
+      <textarea class="pd-content pd-edit" spellcheck="false" ${isMarker ? 'disabled title="系统管理项内容不可编辑"' : ''}></textarea>`;
+
+    const nameInput = detailBox.querySelector('.pd-name');
+    const contentArea = detailBox.querySelector('.pd-content');
+    nameInput.value = p.name || '';
+    contentArea.value = p.content || '';
+
+    const meta = [];
+    if (isMarker) meta.push('系统管理项（内容不可编辑）');
+    if (p.role) meta.push('角色：' + (ROLE_LABELS[p.role] || p.role));
+    detailBox.querySelector('.pd-meta').textContent = meta.join(' · ') || '—';
+
+    if (!isMarker) {
+      nameInput.addEventListener('input', () => {
+        p.name = nameInput.value;
+        touch();
+        onRowUpdate(p.name, p.content ? p.content.length : 0);
+      });
+      contentArea.addEventListener('input', () => {
+        p.content = contentArea.value;
+        touch();
+        onRowUpdate(p.name, p.content.length);
+      });
+
+      const posSel = detailBox.querySelector('.pd-pos');
+      const depthWrap = detailBox.querySelector('.pd-depth-wrap');
+      const depthInput = detailBox.querySelector('.pd-depth');
+      const forbidCb = detailBox.querySelector('.pd-fobid');
+      const isDepth = p.injection_position === 1;
+      posSel.value = isDepth ? 'depth' : 'relative';
+      depthWrap.hidden = !isDepth;
+      if (isDepth) depthInput.value = String(p.injection_depth ?? 4);
+      forbidCb.checked = !!p.forbid_overrides;
+
+      posSel.addEventListener('change', () => {
+        const d = posSel.value === 'depth';
+        p.injection_position = d ? 1 : 0;
+        if (d && p.injection_depth === undefined) p.injection_depth = 4;
+        depthWrap.hidden = !d;
+        if (d) depthInput.value = String(p.injection_depth ?? 4);
+        touch();
+      });
+      depthInput.addEventListener('change', () => {
+        const n = parseInt(depthInput.value, 10);
+        if (!Number.isFinite(n)) { depthInput.value = String(p.injection_depth ?? 4); return; }
+        p.injection_depth = n;
+        touch();
+      });
+      forbidCb.addEventListener('change', () => { p.forbid_overrides = forbidCb.checked; touch(); });
+    }
+  }
+
+  renderVisual();
+
+  // ---------- 视图切换与保存 ----------
   tabs.addEventListener('click', (e) => {
     const tab = e.target.closest('[data-tab]')?.dataset.tab;
     if (!tab) return;
-    tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === e.target));
-    visualActive = tab === 'visual';
+    if ((tab === 'visual') === visualActive) return;
+    if (tab === 'raw') {
+      if (rawStale) {
+        raw.area.value = JSON.stringify(preset, null, 2);
+        rawStale = false;
+      }
+      visualActive = false;
+    } else {
+      const parsed = tryParseJson(raw.area.value);
+      if (!parsed) {
+        toast('JSON 解析失败，已留在原文视图', 'err');
+        return;
+      }
+      preset = parsed;
+      rawStale = false;
+      visualActive = true;
+      renderVisual();
+    }
     visualView.hidden = !visualActive;
     rawView.hidden = visualActive;
-    if (!visualActive && dirty) { clearDirty(); raw.area.value = content; } // 可视化不改内容
+    tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   });
 
+  const currentText = () => {
+    if (visualActive) return JSON.stringify(preset, null, 2);
+    if (!raw.validate()) throw new Error('JSON 校验失败，请先修正');
+    return raw.area.value;
+  };
+
   saveFn = async () => {
-    if (visualActive) { toast('可视化视图为只读，请切换到"原文"修改后保存', 'err'); return; }
-    if (!raw.validate()) { toast('JSON 校验失败，请先修正', 'err'); return; }
+    let text;
+    try { text = currentText(); } catch (err) { toast(err.message, 'err'); return; }
     try {
-      await api.saveText(item.id, raw.area.value);
+      await api.saveText(item.id, text);
       clearDirty();
-      toast('已保存');
+      rawStale = false;
+      toast('已保存（保存前已自动备份）');
       refreshItems();
       refreshMeta();
       const fresh = await api.text(item.id);
       content = fresh.content;
-      try { preset = JSON.parse(content); visualView.innerHTML = ''; renderPresetVisual(visualView, preset); } catch { }
+      preset = tryParseJson(content);
+      raw.area.value = content;
+      if (visualActive) renderVisual();
     } catch (e) { toast(e.message, 'err'); }
   };
 
   saveAsFn = async () => {
-    if (visualActive) { toast('可视化视图为只读，请切换到"原文"后再另存', 'err'); return; }
-    if (!raw.validate()) { toast('JSON 校验失败，无法另存', 'err'); return; }
+    let text;
+    try { text = currentText(); } catch (err) { toast(err.message, 'err'); return; }
     try {
-      const r = await api.saveTextAs(item.id, raw.area.value);
+      const r = await api.saveTextAs(item.id, text);
       toast(`已另存为 ${r.fileName}`);
       refreshItems();
       refreshMeta();
     } catch (e) { toast(e.message, 'err'); }
   };
-}
-
-function renderPresetVisual(root, preset) {
-  const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
-  const orderGroups = Array.isArray(preset.prompt_order) ? preset.prompt_order : [];
-  const group = orderGroups.find((g) => g.character_id === 100001) || orderGroups[0];
-  const orderList = Array.isArray(group?.order) ? group.order : [];
-  const byId = new Map(prompts.map((p) => [p.identifier, p]));
-  const orderedIds = new Set(orderList.map((o) => o.identifier));
-
-  const wrap = el('<div class="form-wrap"></div>');
-
-  // --- 采样参数总览 ---
-  const paramsCard = el('<div class="form-card"><h4>采样与生成参数（只读）</h4><div class="param-grid"></div></div>');
-  const grid = paramsCard.querySelector('.param-grid');
-  const entries = Object.entries(preset).filter(([k, v]) =>
-    (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
-    && !k.startsWith('_') && v !== '');
-  for (const [k, v] of entries) {
-    const label = SAMPLER_LABELS[k] || k;
-    grid.appendChild(el(`<div class="param" title="${escapeHtml(k)}">
-      <span>${escapeHtml(label)}</span><b>${escapeHtml(String(v))}</b></div>`));
-  }
-  if (!entries.length) grid.appendChild(el('<div class="empty" style="padding:10px">无标量参数</div>'));
-  wrap.appendChild(paramsCard);
-
-  // --- 生效顺序 ---
-  const orderCard = el(`<div class="form-card"><h4>生效顺序（prompt_order · 默认角色）</h4>
-    <div class="preset-list"></div></div>`);
-  const list = orderCard.querySelector('.preset-list');
-  let enabledCount = 0;
-  orderList.forEach((o, idx) => {
-    const p = byId.get(o.identifier);
-    const isMarker = p?.marker === true || p?.system_prompt === true;
-    const name = p?.name || o.identifier;
-    const role = isMarker ? '系统' : (p?.role ? (ROLE_LABELS[p.role] || p.role) : '—');
-    const len = p?.content ? p.content.length : 0;
-    if (o.enable) enabledCount++;
-    const row = el(`<div class="preset-row ${o.enable ? '' : 'off'}" data-ident="${escapeHtml(o.identifier)}">
-      <span class="po-idx">${idx + 1}</span>
-      <span class="po-en">${o.enable ? '✓' : '✗'}</span>
-      <span class="po-name">${escapeHtml(name)}</span>
-      <span class="po-role">${role}</span>
-      <span class="po-len">${len ? len + ' 字' : ''}</span>
-    </div>`);
-    row.addEventListener('click', () => {
-      list.querySelectorAll('.preset-row').forEach((r) => r.classList.remove('sel'));
-      row.classList.add('sel');
-      renderPresetDetail(detail, p, o.identifier);
-    });
-    list.appendChild(row);
-  });
-  wrap.appendChild(orderCard);
-
-  // 未加入生效序列的提示词
-  const unordered = prompts.filter((p) => !orderedIds.has(p.identifier));
-  if (unordered.length) {
-    const uCard = el('<div class="form-card"><h4>未加入生效序列的提示词</h4><div class="preset-list"></div></div>');
-    const ul = uCard.querySelector('.preset-list');
-    unordered.forEach((p) => {
-      const row = el(`<div class="preset-row" data-ident="${escapeHtml(p.identifier)}">
-        <span class="po-idx">·</span><span class="po-en"></span>
-        <span class="po-name">${escapeHtml(p.name || p.identifier)}</span>
-        <span class="po-role">${p.marker === true || p.system_prompt === true ? '系统' : (ROLE_LABELS[p.role] || p.role || '—')}</span>
-        <span class="po-len">${p.content ? p.content.length + ' 字' : ''}</span>
-      </div>`);
-      row.addEventListener('click', () => {
-        ul.querySelectorAll('.preset-row').forEach((r) => r.classList.remove('sel'));
-        row.classList.add('sel');
-        renderPresetDetail(detail, p, p.identifier);
-      });
-      ul.appendChild(row);
-    });
-    wrap.appendChild(uCard);
-  }
-
-  // --- 内容详情 ---
-  const detailCard = el('<div class="form-card"><h4>提示词内容（点击上方条目查看）</h4><div class="preset-detail"><div class="empty" style="padding:14px">尚未选择</div></div></div>');
-  const detail = detailCard.querySelector('.preset-detail');
-  wrap.appendChild(detailCard);
-
-  // 汇总
-  const sumCard = el(`<div class="form-card"><h4>统计</h4><div class="param-grid">
-    <div class="param"><span>提示词总数</span><b>${prompts.length}</b></div>
-    <div class="param"><span>生效序列</span><b>${orderList.length}（启用 ${enabledCount}）</b></div>
-    <div class="param"><span>未排序</span><b>${unordered.length}</b></div>
-    <div class="param"><span>排序组</span><b>${orderGroups.length}</b></div>
-  </div></div>`);
-  wrap.appendChild(sumCard);
-
-  root.appendChild(wrap);
-}
-
-function renderPresetDetail(box, p, identifier) {
-  if (!p) {
-    box.innerHTML = `<div class="empty" style="padding:14px">提示词 "${escapeHtml(identifier)}" 在 prompts 列表中不存在（可能已被删除）</div>`;
-    return;
-  }
-  const isMarker = p.marker === true || p.system_prompt === true;
-  const meta = [];
-  if (p.role) meta.push('角色：' + (ROLE_LABELS[p.role] || p.role));
-  if (isMarker) meta.push('系统管理项');
-  if (p.injection_position === 1) meta.push('按深度注入 @ ' + (p.injection_depth ?? 0));
-  if (p.forbid_overrides) meta.push('禁止覆盖');
-  box.innerHTML = `
-    <div class="pd-head"><b>${escapeHtml(p.name || identifier)}</b>
-      <span class="chip accent">${escapeHtml(identifier)}</span></div>
-    <div class="pd-meta">${meta.map(escapeHtml).join(' · ') || '—'}</div>
-    <pre class="pd-content">${escapeHtml(p.content || '（空）')}</pre>`;
 }
 
 // ============ 原始 JSON / 文本编辑 ============

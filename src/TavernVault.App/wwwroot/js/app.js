@@ -538,7 +538,8 @@ export function initShell() {
   // 全局快捷键
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (document.querySelector('.modal-mask')) return; // 弹窗自行处理
+      const mask = document.querySelector('.modal-mask');
+      if (mask) { mask.remove(); return; } // 兜底：Esc 总能关掉弹窗（自带 Esc 处理的弹窗会先拦截）
       if (!$('#drawer-overlay').hidden) closeDrawer();
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {

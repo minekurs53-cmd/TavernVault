@@ -8,7 +8,7 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>TavernVault.App</RootNamespace>
     <AssemblyName>TavernVault</AssemblyName>
-    <Version>0.1.0</Version>
+    <Version>0.3.1</Version>
     <Product>酒馆资源管家</Product>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
   </PropertyGroup>
@@ -28,5 +28,16 @@
   <ItemGroup>
     <Content Include="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!-- 前端静态文件的确定性拷贝：Content 的 PreserveNewest 在增量构建下偶发不触发，
+       这里在每次 Build 后强制按时间戳同步一次，保证改动的前端一定进入输出目录。 -->
+  <Target Name="CopyFrontendFiles" AfterTargets="Build">
+    <ItemGroup>
+      <FrontendFiles Include="wwwroot\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(FrontendFiles)"
+          DestinationFiles="@(FrontendFiles->'$(OutDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

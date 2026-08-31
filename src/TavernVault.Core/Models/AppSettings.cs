@@ -11,4 +11,7 @@ public class AppSettings
 
     /// <summary>每个文件保留的备份份数。</summary>
     public int MaxBackupsPerFile { get; set; } = 5;
+
+    /// <summary>备份存储目录（自定义位置）。null/空 = 数据目录下的 backups\。</summary>
+    public string? BackupRootPath { get; set; }
 }

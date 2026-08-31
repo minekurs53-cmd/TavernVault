@@ -58,6 +58,49 @@ public class BackupAndSaveAsTests : IDisposable
     }
 
     [Fact]
+    public void BackupStore_Relocate_Moves_Files_And_Manifest()
+    {
+        var store = new BackupStore(Path.Combine(_dir, "data")) { MaxPerFile = 5 };
+        var oldDir = store.Dir; // 默认 = data\backups
+        var newDir = Path.Combine(_dir, "backups-elsewhere");
+        var file = WriteFile("迁.json", "a");
+
+        var b = store.BackupBeforeWrite(file);
+        Assert.NotNull(b);
+        Assert.True(Directory.GetFiles(oldDir).Length >= 2); // manifest + 备份文件
+
+        store.RelocateTo(newDir);
+
+        Assert.Equal(newDir, store.Dir);
+        Assert.Single(store.List(file)); // 清单跟着走
+        Assert.True(File.Exists(Path.Combine(newDir, "manifest.json")));
+        // 旧目录搬空后删除（或已不存在）
+        Assert.False(Directory.Exists(oldDir) && Directory.EnumerateFileSystemEntries(oldDir).Any());
+    }
+
+    [Fact]
+    public void Vault_SetBackupRoot_Persists_And_Reloads()
+    {
+        var dataDir = Path.Combine(_dir, "data");
+        var vault = new Vault(new SettingsStore(dataDir));
+        var file = WriteFile("存.json", "b");
+        vault.BackupBeforeWrite(file);
+
+        var custom = Path.Combine(_dir, "custom-backups");
+        vault.SetBackupRoot(custom);
+        Assert.Equal(Path.GetFullPath(custom), vault.Backups.Dir);
+        Assert.True(File.Exists(Path.Combine(custom, "manifest.json")));
+        Assert.False(Directory.Exists(Path.Combine(dataDir, "backups"))); // 旧默认目录搬空后删除
+        // 设置持久化：重建 Vault 后仍指向自定义位置
+        Assert.Equal(Path.GetFullPath(custom), new Vault(new SettingsStore(dataDir)).Backups.Dir);
+
+        // 恢复默认位置
+        vault.SetBackupRoot(null);
+        Assert.Equal(Path.Combine(dataDir, "backups"), vault.Backups.Dir);
+        Assert.Null(new Vault(new SettingsStore(dataDir)).Settings.BackupRootPath);
+    }
+
+    [Fact]
     public void Backup_Delete_And_Missing_File()
     {
         var store = new BackupStore(_dir + "-store");

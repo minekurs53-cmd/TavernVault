@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-08-31 · 对应 v0.4.1
+> 最后更新：2026-08-31 · 对应 v0.4.2
 
 ## 一分钟了解
 
@@ -36,7 +36,7 @@ for f in api app editor main util; do cp src/TavernVault.App/wwwroot/js/$f.js /t
 | 文件 | 职责 |
 |---|---|
 | `main.js` | 入口：主题切换、启动加载、设置弹窗（库根管理/接入向导/备份设置）、版本号 |
-| `app.js` | 主界面：侧栏（类型筛选 + 库分组选项卡）、网格/列表、详情抽屉、备份弹窗、文件操作 |
+| `app.js` | 主界面：**三逻辑库选项卡**（局外存储/SillyTavern/TauriTavern，切库重置 kind/dir/root/tag、保留搜索/收藏/排序）、每库类型+子目录二级导航、网格/列表、详情抽屉、备份弹窗 |
 | `editor.js` | 编辑器：角色卡表单+原始JSON、世界书/内嵌书条目、预设可视化、原文编辑 |
 | `api.js` | fetch 封装：`get/post/put/del` 独立导出 + `api` 对象 |
 | `util.js` | 通用工具（格式化、转义等） |
@@ -45,8 +45,12 @@ for f in api app editor main util; do cp src/TavernVault.App/wwwroot/js/$f.js /t
 
 ### 查询
 ```
-GET /api/meta                          # 总数/分类计数/roots(带source+count)/版本
-GET /api/items?kind=&q=&tag=&fav=&sort=&dir=&root=   # root= 库根过滤(v0.4.1)
+GET /api/meta                          # 总数/分类计数(三库求和)/roots(带source+count)
+                                       # libraries: 三逻辑库聚合 {key,label,total,rootCount,
+                                       #            favorites,kinds(8类含0),dirs,tags}
+GET /api/items?kind=&q=&tag=&fav=&sort=&dir=&root=&source=
+                                       # source=normal|tavernST|tavernTT（非法值 400）
+                                       # 酒馆库二级导航用 root=，普通库用 dir=（与 source AND）
 GET /api/items/{id}
 GET /api/categories                    # 按根+目录聚合
 ```

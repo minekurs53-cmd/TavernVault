@@ -1,7 +1,7 @@
 # TavernVault 架构与流程可视化
 
 > 配套 `docs/development-handoff.md` §2-§3 的图集。所有图为 Mermaid 源码，可在 GitHub / VS Code（Mermaid 插件）直接渲染。
-> 最后更新：2026-08-31 · 对应 v0.4.1
+> 最后更新：2026-08-31 · 对应 v0.4.2
 
 ## 1. 系统分层架构
 
@@ -207,17 +207,20 @@ flowchart TD
     Migrate --> OK["{ok, id: newId}"]
 ```
 
-## 9. 库根分组浏览数据流（v0.4.1）
+## 9. 三逻辑库选项卡数据流（v0.4.2）
 
 ```mermaid
-flowchart LR
-    Meta["GET /api/meta"] --> Roots["roots: [{path, source, count}]"]
-    Roots --> Sidebar["侧栏「库」分区<br/>每根一行: 名称+徽标+count<br/>ST=蓝 TT=绿"]
-    Sidebar -->|"点击某库"| State["state.filter.root = path"]
-    State --> Query["GET /api/items?root=..."]
-    Query --> Filter["Vault.Query<br/>RootPath 精确匹配(忽略大小写)"]
-    Filter --> Grid["网格只显示该库内容<br/>顶部筛选栏显示当前库名"]
-    Sidebar -->|"点击「全部」"| Clear["root=null → 全库视图"]
+flowchart TD
+    Meta["GET /api/meta"] --> Libs["libraries: 三逻辑库聚合<br/>{key, label, total, rootCount,<br/>favorites, kinds(8类含0), dirs, tags}<br/>normal=普通根并集 / tavernST / tavernTT"]
+    Libs --> Tabs["侧栏 #lib-tabs：三库选项卡常显<br/>ST=蓝徽标 TT=绿徽标（含 rootCount=0）"]
+    Tabs -->|"switchLibrary(key)"| Reset["重置 kind/dir/root/tag<br/>保留 q/fav/sort<br/>localStorage('tv-library') 校验回写"]
+    Reset --> Query["GET /api/items?source=...<br/>(+dir 普通库 / +root 酒馆库)"]
+    Query --> Filter["Vault.Query<br/>Source 过滤 (与 RootPath/Dir AND)"]
+    Filter --> Grid["网格只显示当前库内容<br/>类型计数/收藏/标签/子目录均按当前库"]
+    Tabs --> Empty0{"空态优先级"}
+    Empty0 -->|"rootCount=0"| Guide["引导：Normal 添加根目录 /<br/>酒馆 一键接入 → 打开库设置"]
+    Empty0 -->|"total=0"| Rescan2["建议重新扫描"]
+    Empty0 -->|"筛选无结果"| FilterEmpty["换个分类或关键词"]
 ```
 
 ## 10. 磁盘目录拓扑
@@ -262,6 +265,7 @@ timeline
     v0.3.1 : 库设置修复 : Esc 兜底 : 预设可视化二期
     v0.4.0 : 酒馆接入 : 库根来源标记 : 检测/接入端点 : 安全护栏
     v0.4.1 : 侧栏库分组选项卡 : 备份位置自定义 : 项目文档体系
+    v0.4.2 : 三逻辑库选项卡 : 每库独立分类+二级子目录 : 来源过滤+冷升级自愈
 ```
 
 ## 12. 风险与防护措施对照

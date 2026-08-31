@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>酒馆资源管家</title>
-<link rel="stylesheet" href="css/app.css?v=0.4.1">
+<link rel="stylesheet" href="css/app.css?v=0.4.2">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏺</text></svg>">
 </head>
 <body>
@@ -18,11 +18,13 @@
       </div>
     </div>
 
+    <section id="lib-tabs" class="lib-tabs"></section>
+
     <nav id="nav"></nav>
 
-    <section class="side-section" id="root-section" hidden>
-      <h2>库</h2>
-      <div id="nav-roots"></div>
+    <section class="side-section" id="dir-section" hidden>
+      <h2>子目录</h2>
+      <div id="nav-dirs"></div>
     </section>
 
     <section class="side-section" id="tag-section" hidden>
@@ -87,6 +89,6 @@ window.__errs = [];
 window.addEventListener('error', e => { window.__errs.push('ERR: ' + e.message + ' @ ' + (e.filename||'') + ':' + (e.lineno||'')); });
 window.addEventListener('unhandledrejection', e => { window.__errs.push('REJ: ' + ((e.reason && e.reason.message) || e.reason)); });
 </script>
-<script type="module" src="js/main.js?v=0.4.1"></script>
+<script type="module" src="js/main.js?v=0.4.2"></script>
 </body>
 </html>

@@ -12,6 +12,8 @@ public class QueryParams
     public bool? Favorite { get; set; }
     public string? Dir { get; set; }
     public string? RootPath { get; set; }
+    /// <summary>按逻辑库来源过滤（局外/酒馆并集）。null = 不过滤。与 RootPath 同设为 AND。</summary>
+    public LibrarySource? Source { get; set; }
     public string Sort { get; set; } = "name"; // name | modified | size | kind
 }
 
@@ -38,6 +40,11 @@ public sealed class Vault
         Items = _store.LoadIndex();
         Backups = new BackupStore(_store.DataDir, Settings.BackupRootPath) { MaxPerFile = Settings.MaxBackupsPerFile };
         Backups.RetentionFor = path => RetentionFor(RootContaining(path));
+        // 来源一致性自愈：--server 冷启动与手改索引不会自动重扫，
+        // 条目缺 RootSource 字段会反序列化为 Normal、根来源被改后旧条目也不会自动跟进。
+        // 发现漂移立即重扫一次（增量复用分支会无条件按当前根刷新 RootSource）。
+        if (Items.Any(i => RootContaining(i.FullPath)?.Source != i.RootSource))
+            Rescan();
     }
 
     /// <summary>
@@ -98,6 +105,7 @@ public sealed class Vault
 
             if (p.Kind is { } kind) q = q.Where(i => i.Kind == kind);
             if (p.Favorite is { } fav) q = q.Where(i => i.Favorite == fav);
+            if (p.Source is { } src) q = q.Where(i => i.RootSource == src);
             if (!string.IsNullOrEmpty(p.RootPath))
                 q = q.Where(i => string.Equals(i.RootPath, p.RootPath, StringComparison.OrdinalIgnoreCase));
             if (!string.IsNullOrEmpty(p.UserTag))
@@ -137,6 +145,65 @@ public sealed class Vault
                 .Select(g => g.Key)
                 .ToList();
             return (tags, Items.Count);
+        }
+    }
+
+    /// <summary>
+    /// 聚合三个逻辑库（按库根来源并集：局外存储/SillyTavern/TauriTavern）的计数。
+    /// 酒馆库目录按注册根逐条列出（含空根），普通库目录按相对路径跨根聚合。
+    /// </summary>
+    public List<LibraryInfo> BuildLibraries()
+    {
+        lock (_lock)
+        {
+            var result = new List<LibraryInfo>();
+            foreach (var (src, key, label) in new[]
+            {
+                (LibrarySource.Normal, "normal", "局外存储"),
+                (LibrarySource.TavernST, "tavernST", "SillyTavern"),
+                (LibrarySource.TavernTT, "tavernTT", "TauriTavern"),
+            })
+            {
+                var items = Items.Where(i => i.RootSource == src).ToList();
+                var lib = new LibraryInfo
+                {
+                    Key = key,
+                    Label = label,
+                    Total = items.Count,
+                    RootCount = Settings.LibraryRoots.Count(r => r.Source == src),
+                    Favorites = items.Count(i => i.Favorite),
+                    Kinds = [.. ItemKindText.All.Select(a => new KindCount
+                    {
+                        Kind = a.Key,
+                        Label = a.Label,
+                        Count = items.Count(i => i.Kind == a.Kind),
+                    })],
+                    Tags = [.. items.SelectMany(i => i.UserTags)
+                        .GroupBy(t => t, StringComparer.OrdinalIgnoreCase)
+                        .OrderByDescending(g => g.Count())
+                        .Select(g => new TagCount { Tag = g.Key, Count = g.Count() })],
+                };
+                if (src == LibrarySource.Normal)
+                {
+                    lib.Dirs = [.. items
+                        .GroupBy(i => i.RelativeDir, StringComparer.OrdinalIgnoreCase)
+                        .Select(g => new DirCount { Root = null, Dir = g.Key, Count = g.Count() })
+                        .OrderByDescending(d => d.Count)
+                        .ThenBy(d => d.Dir, StringComparer.OrdinalIgnoreCase)];
+                }
+                else
+                {
+                    lib.Dirs = [.. Settings.LibraryRoots.Where(r => r.Source == src)
+                        .Select(r => new DirCount
+                        {
+                            Root = r.Path,
+                            Dir = "",
+                            Count = items.Count(i => string.Equals(i.RootPath, r.Path, StringComparison.OrdinalIgnoreCase)),
+                        })];
+                }
+                result.Add(lib);
+            }
+            return result;
         }
     }
 

@@ -74,12 +74,13 @@ public static class ApiServer
         app.MapGet("/api/meta", () =>
         {
             var (tags, total) = vault.AllUserTags();
+            var libraries = vault.BuildLibraries();
             var kinds = ItemKindText.All
                 .Select(a => new
                 {
                     kind = ItemKindText.KeyOf(a.Kind),
                     label = a.Label,
-                    count = vault.Query(new QueryParams { Kind = a.Kind }).Count,
+                    count = libraries.Sum(l => l.Kinds.First(k => k.Kind == a.Key).Count),
                 })
                 .ToList();
             return Json(new
@@ -88,6 +89,17 @@ public static class ApiServer
                 kinds,
                 userTags = tags,
                 roots = SerializeRoots(vault),
+                libraries = libraries.Select(l => new
+                {
+                    key = l.Key,
+                    label = l.Label,
+                    total = l.Total,
+                    rootCount = l.RootCount,
+                    favorites = l.Favorites,
+                    kinds = l.Kinds.Select(k => new { kind = k.Kind, label = k.Label, count = k.Count }),
+                    dirs = l.Dirs.Select(d => new { root = d.Root, dir = d.Dir, count = d.Count }),
+                    tags = l.Tags.Select(t => new { tag = t.Tag, count = t.Count }),
+                }).ToList(),
                 lastScanAt = vault.LastScanAt,
                 version = typeof(ApiServer).Assembly.GetName().Version?.ToString(3),
             });
@@ -100,8 +112,16 @@ public static class ApiServer
         }));
 
         // ---------- 条目查询 ----------
-        app.MapGet("/api/items", (string? kind, string? q, string? tag, bool? fav, string? sort, string? dir, string? root) =>
+        app.MapGet("/api/items", (string? kind, string? q, string? tag, bool? fav, string? sort, string? dir, string? root, string? source) =>
         {
+            LibrarySource? src = null;
+            if (!string.IsNullOrEmpty(source))
+            {
+                // 严格契约：非法来源返回 400，不静默当作 Normal
+                if (source is not ("normal" or "tavernST" or "tavernTT"))
+                    return Err("无效的库来源", 400);
+                src = ParseSource(source);
+            }
             var p = new QueryParams
             {
                 Kind = kind is { Length: > 0 } && Enum.TryParse<ItemKind>(kind, true, out var k) ? k : null,
@@ -111,6 +131,7 @@ public static class ApiServer
                 Sort = sort ?? "name",
                 Dir = dir,
                 RootPath = root,
+                Source = src,
             };
             return Json(vault.Query(p));
         });

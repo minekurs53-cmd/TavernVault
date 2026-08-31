@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using System.Text.Json.Nodes;
 using TavernVault.App.Services;
 using TavernVault.Core.Cards;
+using TavernVault.Core.Detection;
 using TavernVault.Core.FileOps;
 using TavernVault.Core.Models;
 using TavernVault.Core.Scanning;
@@ -62,8 +63,7 @@ public static class ApiServer
         foreach (var guess in candidates)
         {
             if (!Directory.Exists(guess)) continue;
-            vault.Settings.LibraryRoots.Add(guess);
-            vault.SaveSettings();
+            vault.AddRoot(guess);
             break;
         }
     }
@@ -87,7 +87,7 @@ public static class ApiServer
                 total,
                 kinds,
                 userTags = tags,
-                roots = vault.Settings.LibraryRoots,
+                roots = SerializeRoots(vault),
                 lastScanAt = vault.LastScanAt,
                 version = typeof(ApiServer).Assembly.GetName().Version?.ToString(3),
             });
@@ -468,7 +468,11 @@ public static class ApiServer
         {
             var item = vault.Find(id);
             if (item is null) return Results.NotFound();
-            var name = (await JsonNode.ParseAsync(req.Body))?["name"]?.GetValue<string>();
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            var name = body?["name"]?.GetValue<string>();
+            var force = body?["force"]?.GetValue<bool>() ?? false;
+            if (item.RootSource != LibrarySource.Normal && !force)
+                return Err("酒馆来源的角色卡不允许重命名（聊天通过文件名引用）", 403);
             var userData = vault.GetUserData(id); // Id 随路径变化，先取快照
             vault.BackupBeforeWrite(item.FullPath);
             var newPath = FileOperations.Rename(item, name ?? "");
@@ -482,10 +486,13 @@ public static class ApiServer
         {
             var item = vault.Find(id);
             if (item is null) return Results.NotFound();
-            var body = await JsonNode.ParseAsync(req.Body);
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             var root = body?["root"]?.GetValue<string>() ?? item.RootPath;
             var dir = body?["dir"]?.GetValue<string>() ?? "";
-            FileOperations.GuardUnderRoots(root, vault.Settings.LibraryRoots);
+            var force = body?["force"]?.GetValue<bool>() ?? false;
+            if (item.RootSource != LibrarySource.Normal && !force)
+                return Err("酒馆来源的文件不允许移出原根（聊天通过路径引用）", 403);
+            FileOperations.GuardUnderRoots(root, vault.Settings.LibraryRoots.Select(r => r.Path));
             var userData = vault.GetUserData(id); // Id 随路径变化，先取快照
             var newPath = FileOperations.Move(item, root, dir);
             vault.Rescan();
@@ -515,11 +522,13 @@ public static class ApiServer
         // ---------- 设置 ----------
         app.MapPost("/api/roots", async (HttpRequest req) => await HandleAsync(async () =>
         {
-            var path = (await JsonNode.ParseAsync(req.Body))?["path"]?.GetValue<string>();
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            var path = body?["path"]?.GetValue<string>();
             if (string.IsNullOrWhiteSpace(path)) return Err("路径为空", 400);
-            vault.AddRoot(path);
+            var source = ParseSource(body?["source"]?.GetValue<string>());
+            vault.AddRoot(new LibraryRoot { Path = path, Source = source });
             vault.Rescan();
-            return Json(new { ok = true, roots = vault.Settings.LibraryRoots });
+            return Json(new { ok = true, roots = SerializeRoots(vault) });
         }));
 
         app.MapDelete("/api/roots", async (HttpRequest req) => await HandleAsync(async () =>
@@ -527,7 +536,48 @@ public static class ApiServer
             var path = (await JsonNode.ParseAsync(req.Body))?["path"]?.GetValue<string>();
             vault.RemoveRoot(path ?? "");
             vault.Rescan();
-            return Json(new { ok = true, roots = vault.Settings.LibraryRoots });
+            return Json(new { ok = true, roots = SerializeRoots(vault) });
+        }));
+
+        // ---------- 酒馆检测 ----------
+        app.MapPost("/api/tavern/detect", () => Handle(() =>
+        {
+            var found = TavernDetector.DetectAll()
+                .Select(d => new
+                {
+                    source = SourceKey(d.source),
+                    label = d.label,
+                    subdirs = d.subdirs,
+                }).ToList();
+            return Json(new { found });
+        }));
+
+        app.MapPost("/api/tavern/connect", async (HttpRequest req) => await HandleAsync(async () =>
+        {
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            var sourceKey = body?["source"]?.GetValue<string>() ?? "";
+            var source = ParseSource(sourceKey);
+            if (source == LibrarySource.Normal)
+                return Err("无效的酒馆来源", 400);
+
+            var detected = TavernDetector.DetectAll();
+            var match = detected.FirstOrDefault(d => d.source == source);
+            if (match == default)
+                return Err("未检测到该酒馆安装", 404);
+
+            var existing = new HashSet<string>(vault.Settings.LibraryRoots.Select(r => r.Path));
+            var roots = TavernDetector.BuildRoots(match.baseDir, source);
+            var added = 0;
+            foreach (var r in roots)
+            {
+                if (existing.Add(r.Path))
+                {
+                    vault.AddRoot(r);
+                    added++;
+                }
+            }
+            vault.Rescan();
+            return Json(new { ok = true, added, roots = SerializeRoots(vault) });
         }));
 
         app.MapPost("/api/pick-folder", () => Handle(() =>
@@ -581,4 +631,22 @@ public static class ApiServer
 
     private static IResult Err(string message, int code) =>
         Results.Json(new { error = message }, statusCode: code);
+
+    // ---- 库根序列化 / 来源解析 ----
+    private static List<object> SerializeRoots(Vault v) =>
+        v.Settings.LibraryRoots.Select(r => (object)new { path = r.Path, source = SourceKey(r.Source) }).ToList();
+
+    private static string SourceKey(LibrarySource s) => s switch
+    {
+        LibrarySource.TavernST => "tavernST",
+        LibrarySource.TavernTT => "tavernTT",
+        _ => "normal",
+    };
+
+    private static LibrarySource ParseSource(string? key) => key switch
+    {
+        "tavernST" => LibrarySource.TavernST,
+        "tavernTT" => LibrarySource.TavernTT,
+        _ => LibrarySource.Normal,
+    };
 }

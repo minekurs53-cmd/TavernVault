@@ -35,13 +35,19 @@ public sealed class Vault
         Settings = _store.LoadSettings();
         Items = _store.LoadIndex();
         Backups = new BackupStore(_store.DataDir) { MaxPerFile = Settings.MaxBackupsPerFile };
+        Backups.RetentionFor = path => RetentionFor(RootContaining(path));
     }
 
-    /// <summary>若开启自动备份，在覆盖写入前调用；失败不抛出。</summary>
+    private int RetentionFor(LibraryRoot? root)
+        => root?.Source == LibrarySource.TavernTT ? 10 : Math.Max(1, Settings.MaxBackupsPerFile);
+
+    /// <summary>若开启自动备份或文件属于酒馆来源，在覆盖写入前调用；失败不抛出。</summary>
     public void BackupBeforeWrite(string fullPath)
     {
-        if (!Settings.AutoBackup) return;
-        Backups.MaxPerFile = Math.Max(1, Settings.MaxBackupsPerFile);
+        var root = RootContaining(fullPath);
+        var isTavern = root is not null && root.Source != LibrarySource.Normal;
+        if (!Settings.AutoBackup && !isTavern) return;
+        Backups.MaxPerFile = RetentionFor(root);
         Backups.BackupBeforeWrite(fullPath);
     }
 
@@ -164,27 +170,53 @@ public sealed class Vault
         }
     }
 
-    public void AddRoot(string path)
+    public void AddRoot(LibraryRoot root)
     {
-        var full = Path.GetFullPath(path);
+        var full = Path.GetFullPath(root.Path);
         if (!Directory.Exists(full)) throw new DirectoryNotFoundException(full);
         lock (_lock)
         {
-            if (!Settings.LibraryRoots.Contains(full, StringComparer.OrdinalIgnoreCase))
-                Settings.LibraryRoots.Add(full);
+            if (!Settings.LibraryRoots.Any(r => string.Equals(r.Path, full, StringComparison.OrdinalIgnoreCase)))
+                Settings.LibraryRoots.Add(new LibraryRoot { Path = full, Source = root.Source });
             _store.SaveSettings(Settings);
         }
     }
+
+    public void AddRoot(string path) => AddRoot(new LibraryRoot { Path = path, Source = LibrarySource.Normal });
 
     public bool RemoveRoot(string path)
     {
         lock (_lock)
         {
             var full = Path.GetFullPath(path);
-            var removed = Settings.LibraryRoots.RemoveAll(r => string.Equals(r, full, StringComparison.OrdinalIgnoreCase)) > 0;
+            var removed = Settings.LibraryRoots.RemoveAll(r => string.Equals(r.Path, full, StringComparison.OrdinalIgnoreCase)) > 0;
             if (removed) _store.SaveSettings(Settings);
             return removed;
         }
+    }
+
+    public LibraryRoot? FindRoot(string rootPath)
+    {
+        var full = Path.GetFullPath(rootPath);
+        return Settings.LibraryRoots.FirstOrDefault(r => string.Equals(r.Path, full, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public LibrarySource SourceOf(string rootPath)
+        => FindRoot(rootPath)?.Source ?? LibrarySource.Normal;
+
+    /// <summary>查找包含指定文件的库根（最长前缀匹配）。</summary>
+    public LibraryRoot? RootContaining(string fullPath)
+    {
+        var full = Path.GetFullPath(fullPath);
+        LibraryRoot? best = null;
+        foreach (var r in Settings.LibraryRoots)
+        {
+            var rp = r.Path.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (full.StartsWith(rp, StringComparison.OrdinalIgnoreCase) &&
+                (best is null || r.Path.Length > best.Path.Length))
+                best = r;
+        }
+        return best;
     }
 
     public void SaveSettings() => _store.SaveSettings(Settings);

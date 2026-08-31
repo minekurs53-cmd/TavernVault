@@ -1,7 +1,7 @@
 # TavernVault 开发交接文档
 
 > 目的：让任何新接手的 agent / 开发者在不读完整会话历史的情况下，能立即理解项目、继续开发、避开已知坑。
-> 最后更新：v0.3.1（含未随提交发布的预设可视化二期）。
+> 最后更新：v0.4.0（酒馆接入：库根带来源标记、检测/接入端点、安全护栏）。
 
 ---
 
@@ -39,6 +39,8 @@ Core：
 - `Cards/CharacterCardFile.cs` — 角色卡加载/保存（PNG 内嵌 chara+ccv3；JSON 根级 V1 镜像同步 `SyncLegacyMirror`）
 - `Cards/CharacterBook.cs` — 内嵌世界书 Spec V2 ↔ ST 内部格式双向映射（`Raw` 原样保留未编辑字段）
 - `Detection/TypeDetector.cs` — 基于内容的类型识别
+- `Detection/TavernDetector.cs` — 本机 SillyTavern/TauriTavern 安装检测（纯静态，无状态）
+- `Models/LibraryRoot.cs` — 库根模型 `{Path, Source}` + `LibrarySource` 枚举（Normal/TavernST/TavernTT）+ 兼容旧字符串格式的 JsonConverter
 - `Scanning/LibraryScanner.cs` — 递归扫描 + **增量复用**（路径+大小+修改时间不变则复用旧条目）+ 点目录过滤
 - `Storage/Vault.cs` — 内存索引 + 查询 + 用户数据快照迁移 + `BackupBeforeWrite`
 - `Storage/SettingsStore.cs` — 设置/索引持久化（索引带 `version` 门控）+ `BackupStore` 同目录
@@ -86,6 +88,8 @@ dotnet build -c Release
   - `CharacterBook` 读取时统一转 ST 格式并把 Spec 原条目放 `Raw`；写回时 Spec 条目只合并被编辑字段，`Raw` 里的 `id/selective/use_regex/extensions` 等原样保留。**容器形态（数组/对象）不变。**
 - **预设**：`prompts[]` + `prompt_order[]`。⚠️ **`prompt_order[i].order[j]` 的启用字段是 `enabled`，不是 `enable`**（真实 ST 文件实测）。`prompts[j].system_prompt===true` 表示系统管理项（内容只读）。
 - **世界书**：`entries` 为对象（键=索引）或数组；ST 格式字段 `key/keysecondary/content/comment/constant/disable/order/position/depth/probability`。
+- **库根（settings.json）**：`LibraryRoots` 为对象数组 `[{"Path":"...","Source":0|1|2}]`（0=Normal、1=TavernST、2=TauriTavern）。`LibraryRootConverter` 反序列化时兼容旧版纯字符串数组（自动按 Normal 处理）。索引版本已升到 3（条目新增 `RootSource`），旧索引会丢弃重建。
+- **酒馆护栏**：`rootSource != 0` 的条目默认禁止重命名/移动（API 返回 403），请求体带 `force:true` 才放行；酒馆源文件写前强制备份（忽略自动备份开关），TT 源备份保留 10 份。
 
 ---
 
@@ -94,21 +98,23 @@ dotnet build -c Release
 - v0.1.0：扫描/分类/搜索/收藏/标签/重命名/移动/回收站/角色卡表单+原始JSON/世界书条目/原文编辑器/深浅色/网格列表
 - v0.2.0：内嵌世界书识别+编辑、重命名移动用户数据迁移、JSON 根级镜像同步、增量扫描、索引版本门控、Esc 级联修复等
 - v0.3.0：另存为（自动命名）、备份与还原、预设可视化一期（只读）、`docs/st-sync-feasibility.md`
-- **当前未提交（v0.3.1 工作区）**：
-  - 库设置修复（`api.get/post` 误用 → 改用独立导出的 `get/post`；此前导致设置弹窗按钮全部失效、遮罩卡死）
-  - Esc 兜底关闭任意弹窗
-  - 左下角版本号（`#app-version`，在"上次扫描"上方）
-  - **预设可视化二期**：采样参数可编辑（布尔=勾选、数字=校验、字符串=文本）、生效顺序 `enabled` 勾选开关、未排序列表、提示词详情可编辑（名称/内容/注入位置/深度/禁止覆盖）、可视化↔原文双向同步、保存/另存为统一走 `currentText()`
-  - csproj `CopyFrontendFiles` 确定性拷贝 + `<Version>0.3.1`
+- v0.3.1：库设置修复、Esc 兜底关弹窗、左下角版本号、预设可视化二期（采样参数/生效顺序/提示词详情可编辑）、csproj 确定性拷贝
+- **当前工作区（v0.4.0，未提交）— 酒馆接入**：
+  - 库根模型对象化：`LibraryRoot{Path,Source}` + 来源枚举 + 旧字符串设置自动迁移；索引版本 2→3
+  - `TavernDetector`：检测 `D:\agent\SillyTavern\data\default-user` 与 `D:\agent\TauriTavern\cache\default-user`（需含 `characters/`）
+  - 新端点：`POST /api/tavern/detect`（返回发现的酒馆与子目录）、`POST /api/tavern/connect`（按来源批量注册子目录为库根，去重+重扫）
+  - 护栏：`/api/meta` 与 `/api/roots` 的 roots 改为 `{path,source}` 对象；酒馆来源条目重命名/移动默认 403，前端确认后带 `force` 放行
+  - 备份策略：酒馆源写前强制备份；TT 源保留 10 份（`BackupStore.RetentionFor` 钩子）
+  - 前端：设置弹窗"接入酒馆"向导、库根来源徽章（ST 蓝/TT 绿）、重命名/移动风险确认框
 
 ---
 
 ## 6. Git 状态
 
 - 远程：`origin https://github.com/minekurs53-cmd/TavernVault.git`（私有）
-- 已推送提交：`8f2c055`(v0.1.0) → `a1ad1d9`(v0.2.0) → `3e22813`(v0.3.0)
+- 已推送提交：`8f2c055`(v0.1.0) → `a1ad1d9`(v0.2.0) → `3e22813`(v0.3.0) → `2de7a6e`(v0.3.1)
 - 当前分支：`qoder/TavernVault`（注意不是 main；推送时确认目标分支）
-- 工作区有 6 个未提交修改（csproj/css/index.html/app.js/editor.js/main.js）= 上述 v0.3.1 内容，**待提交**
+- 工作区未提交内容 = 上述 v0.4.0 酒馆接入（Core 模型/扫描/检测器/存储 + API 护栏与新端点 + 前端向导），**待提交**
 
 ---
 
@@ -123,7 +129,7 @@ dotnet build -c Release
 
 ## 8. 已知问题 / 待办（按优先级）
 
-1. **接入酒馆**（方案 A'，可行性已确认）：接入向导注册两个酒馆数据子目录为带"酒馆源"标记的库根；酒馆源内默认禁止移动/重命名角色卡（ST 对话按文件名引用）；TT cache 目录提高备份份数。
+1. ~~**接入酒馆**（方案 A）~~ **已在 v0.4.0 工作区实现**：检测/接入向导、库根来源标记、重命名/移动护栏（`force` 覆盖）、酒馆源强制备份、TT 高保留份数。后续可做：酒馆聊天 → 角色卡反向引用检查、接入目录白名单可配置。
 2. **预设三期**：拖拽排序（写 `prompt_order.order` 数组）、新增/删除提示词（系统项防误删）、角色分组切换。
 3. 内嵌书 ← 独立世界书 合入（导出已做）。
 4. 重复资源检测（内容指纹）。

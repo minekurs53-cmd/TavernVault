@@ -130,7 +130,7 @@ public sealed class BackupStore
 
     private void PruneLocked(string originalPath)
     {
-        var max = MaxPerFile;
+        var max = RetentionFor?.Invoke(originalPath) ?? MaxPerFile;
         var mine = _manifest.Where(b => string.Equals(b.OriginalPath, originalPath, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(b => b.SavedAt).ToList();
         foreach (var old in mine.Skip(max))
@@ -143,6 +143,9 @@ public sealed class BackupStore
 
     /// <summary>每文件保留份数（由设置写入，这里读环境默认 5）。</summary>
     public int MaxPerFile { get; set; } = 5;
+
+    /// <summary>按原路径自定义保留份数（酒馆缓存目录可提高上限）。返回 null 则回退 MaxPerFile。</summary>
+    public Func<string, int>? RetentionFor { get; set; }
 
     private void Load()
     {

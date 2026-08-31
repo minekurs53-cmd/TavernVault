@@ -15,6 +15,7 @@ public sealed class SettingsStore
     {
         WriteIndented = true,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Converters = { new LibraryRootConverter() },
     };
 
     public SettingsStore(string? dataDir = null)
@@ -43,7 +44,7 @@ public sealed class SettingsStore
 
     // 索引结构版本：条目模型变化时 +1，旧索引直接丢弃全量重建，
     // 避免增量扫描复用缺少新字段的旧条目。
-    private const int IndexVersion = 2;
+    private const int IndexVersion = 3;
 
     public List<LibraryItem> LoadIndex()
     {

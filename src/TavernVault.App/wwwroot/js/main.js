@@ -31,6 +31,9 @@ export async function showSettings() {
       <button class="btn" id="set-root-pick"><span class="ico">${icon('folder')}</span>浏览…</button>
       <button class="btn primary" id="set-root-add">添加</button>
     </div>
+    <div class="add-root-row" style="margin-top:6px">
+      <button class="btn" id="set-tavern-connect" style="width:100%">接入酒馆（自动检测 SillyTavern / TauriTavern）</button>
+    </div>
     <div class="m-section-title">备份</div>
     <div class="toggle-row">
       <label class="toggle"><input type="checkbox" id="set-autobackup"> 编辑/还原前自动备份原文件</label>
@@ -69,19 +72,22 @@ export async function showSettings() {
     box.innerHTML = '';
     (state.meta?.roots || []).forEach((r) => {
       const item = document.createElement('div');
-      item.className = 'root-item';
+      item.className = 'root-item' + (r.source !== 'normal' ? ' tavern' : '');
+      const badge = r.source === 'tavernST' ? '<span class="root-badge tavernST">ST</span>'
+        : r.source === 'tavernTT' ? '<span class="root-badge tavernTT">TT</span>' : '';
       item.innerHTML = `
         <span class="ico">${icon('folder')}</span>
-        <span class="path">${escapeHtml(r)}</span>
+        <span class="path">${escapeHtml(r.path)}</span>
+        ${badge}
         <button class="icon-btn" title="移除"><span class="ico">${icon('trash')}</span></button>`;
       item.querySelector('button').addEventListener('click', async () => {
         const ok = await confirmDialog({
           title: '移除库目录',
-          message: `“${r}” 将从管理列表移除（不会删除磁盘上的文件）。`,
+          message: `“${r.path}” 将从管理列表移除（不会删除磁盘上的文件）。`,
           okText: '移除', danger: true,
         });
         if (!ok) return;
-        await api.removeRoot(r);
+        await api.removeRoot(r.path);
         await refreshMeta();
         renderRoots();
         renderSidebar();
@@ -112,11 +118,69 @@ export async function showSettings() {
       if (r?.path) input.value = r.path;
     } catch (e) { toast(e.message, 'err'); }
   });
+  body.querySelector('#set-tavern-connect').addEventListener('click', () =>
+    showTavernWizard(async () => {
+      await refreshMeta();
+      renderRoots();
+      renderSidebar();
+      refreshItems();
+    }));
   body.addEventListener('click', async (e) => {
     if (e.target.closest('[data-act=rescan]')) {
       await doRescan();
     }
     if (e.target.closest('[data-act=close]') || e.target.closest('[data-act=close-x]')) mask.remove();
+  });
+}
+
+// ---- 接入酒馆向导：检测 → 选择 → 注册 ----
+async function showTavernWizard(onConnected) {
+  const body = document.createElement('div');
+  body.innerHTML = `
+    <h3>接入酒馆</h3>
+    <p>检测本机的酒馆安装，把其资源目录（角色卡、世界书、预设等）纳入统一管理。接入后这些文件的重命名/移动会先询问确认。</p>
+    <div class="tw-list"><div class="empty" style="padding:12px">正在检测…</div></div>
+    <div class="m-actions">
+      <button class="btn" data-act="close">关闭</button>
+    </div>`;
+  const mask = openModal(body);
+  const list = body.querySelector('.tw-list');
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('[data-act=close]')) mask.remove();
+  });
+
+  let found = [];
+  try {
+    found = (await api.detectTavern()).found || [];
+  } catch (e) {
+    list.innerHTML = `<div class="tw-warn">检测失败：${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (!found.length) {
+    list.innerHTML = '<div class="tw-warn">未检测到 SillyTavern 或 TauriTavern 安装。</div>';
+    return;
+  }
+
+  list.innerHTML = found.map((f) => `
+    <div class="tw-row">
+      <div class="tw-name"><span class="root-badge ${f.source}">${f.source === 'tavernST' ? 'ST' : 'TT'}</span> ${escapeHtml(f.label)}</div>
+      <div class="tw-sub">${escapeHtml(f.subdirs.join('、'))}</div>
+      <button class="btn primary sm" data-src="${f.source}">接入</button>
+    </div>`).join('');
+
+  list.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-src]');
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      const r = await api.connectTavern(btn.dataset.src);
+      toast(`已接入，新增 ${r.added} 个库根`);
+      mask.remove();
+      if (onConnected) await onConnected();
+    } catch (err) {
+      toast(err.message, 'err');
+      btn.disabled = false;
+    }
   });
 }
 

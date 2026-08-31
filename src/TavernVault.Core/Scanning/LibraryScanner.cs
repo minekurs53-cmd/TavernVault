@@ -11,10 +11,12 @@ namespace TavernVault.Core.Scanning;
 public sealed class LibraryScanner
 {
     public List<LibraryItem> Scan(IEnumerable<string> roots, IReadOnlyDictionary<string, LibraryItem> existing)
+        => Scan(roots.Select(r => new LibraryRoot { Path = r }), existing);
+
+    public List<LibraryItem> Scan(IEnumerable<LibraryRoot> roots, IReadOnlyDictionary<string, LibraryItem> existing)
     {
         var result = new List<LibraryItem>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        // 增量扫描：路径 + 大小 + 修改时间都未变的文件直接复用旧条目，跳过重新解析
         var existingByPath = existing.Values
             .GroupBy(i => i.FullPath, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.First())
@@ -22,8 +24,8 @@ public sealed class LibraryScanner
 
         foreach (var root in roots)
         {
-            if (!Directory.Exists(root)) continue;
-            var rootFull = Path.GetFullPath(root);
+            if (!Directory.Exists(root.Path)) continue;
+            var rootFull = Path.GetFullPath(root.Path);
             var opts = new EnumerationOptions
             {
                 RecurseSubdirectories = true,
@@ -31,7 +33,7 @@ public sealed class LibraryScanner
                 AttributesToSkip = FileAttributes.Hidden | FileAttributes.System,
             };
 
-            foreach (var path in Directory.EnumerateFiles(root, "*", opts))
+            foreach (var path in Directory.EnumerateFiles(root.Path, "*", opts))
             {
                 var ext = Path.GetExtension(path);
                 if (ext.Equals(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
@@ -40,7 +42,7 @@ public sealed class LibraryScanner
                 if (!seen.Add(full)) continue;
                 if (IsInExcludedDir(rootFull, full)) continue;
 
-                var item = BuildItem(full, rootFull, existingByPath, existing);
+                var item = BuildItem(full, rootFull, root.Source, existingByPath, existing);
                 if (item is not null) result.Add(item);
             }
         }
@@ -59,7 +61,7 @@ public sealed class LibraryScanner
         return false;
     }
 
-    private static LibraryItem? BuildItem(string fullPath, string rootFull,
+    private static LibraryItem? BuildItem(string fullPath, string rootFull, LibrarySource source,
         Dictionary<string, LibraryItem> existingByPath, IReadOnlyDictionary<string, LibraryItem> existingById)
     {
         var info = new FileInfo(fullPath);
@@ -70,7 +72,10 @@ public sealed class LibraryScanner
             prev.SizeBytes == info.Length &&
             prev.ModifiedAt == info.LastWriteTime &&
             string.Equals(prev.RootPath, rootFull, StringComparison.OrdinalIgnoreCase))
+        {
+            prev.RootSource = source;
             return prev;
+        }
 
         var id = ComputeId(fullPath);
         var item = new LibraryItem
@@ -79,6 +84,7 @@ public sealed class LibraryScanner
             FileName = info.Name,
             FullPath = fullPath,
             RootPath = rootFull,
+            RootSource = source,
             RelativeDir = Path.GetRelativePath(rootFull, Path.GetDirectoryName(fullPath)!),
             SizeBytes = info.Length,
             ModifiedAt = info.LastWriteTime,

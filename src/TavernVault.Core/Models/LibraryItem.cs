@@ -10,6 +10,7 @@ public class LibraryItem
     public string FileName { get; set; } = "";
     public string FullPath { get; set; } = "";
     public string RootPath { get; set; } = "";
+    public LibrarySource RootSource { get; set; }
     public string RelativeDir { get; set; } = "";
     public long SizeBytes { get; set; }
     public DateTime ModifiedAt { get; set; }

@@ -341,11 +341,19 @@ function renderDrawer(item) {
         toast('路径已复制');
       }
       if (act === 'rename') {
+        if (item.rootSource) {
+          const yes = await confirmDialog({
+            title: '酒馆文件重命名',
+            message: '该文件来自酒馆目录，聊天通过文件名引用它。重命名后，引用该文件的酒馆聊天可能无法找到角色。确定继续？',
+            okText: '仍然重命名', danger: true,
+          });
+          if (!yes) return;
+        }
         const name = await promptDialog({
           title: '重命名', message: '只改文件名，保留扩展名。', value: nameOf(item),
         });
         if (name) {
-          const r = await api.rename(item.id, name);
+          const r = await api.rename(item.id, name, !!item.rootSource);
           toast('已重命名');
           closeDrawer();
           await refreshMeta();
@@ -443,8 +451,9 @@ async function showMoveDialog(item) {
       <div class="m-section-title">库根目录</div>
       ${roots.map((r, i) => `
         <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 2px">
-          <input type="radio" name="mv-root" value="${escapeHtml(r)}" ${r === item.rootPath ? 'checked' : ''}>
-          <span>${escapeHtml(r)}</span>
+          <input type="radio" name="mv-root" value="${escapeHtml(r.path)}" ${r.path === item.rootPath ? 'checked' : ''}>
+          <span>${escapeHtml(r.path)}</span>
+          ${r.source !== 'normal' ? `<span class="root-badge ${r.source}">${r.source === 'tavernST' ? 'ST' : 'TT'}</span>` : ''}
         </label>`).join('')}
       <div class="m-section-title">常用目录</div>
       <div class="radio-list" id="mv-cats">
@@ -471,8 +480,16 @@ async function showMoveDialog(item) {
     const root = body.querySelector('input[name=mv-root]:checked')?.value || item.rootPath;
     const custom = body.querySelector('#mv-custom').value.trim();
     const dir = custom || body.querySelector('input[name=mv-dir]:checked')?.value || '';
+    if (item.rootSource) {
+      const yes = await confirmDialog({
+        title: '酒馆文件移动',
+        message: '该文件来自酒馆目录，移动后酒馆可能无法找到它（聊天通过路径引用）。确定继续？',
+        okText: '仍然移动', danger: true,
+      });
+      if (!yes) return;
+    }
     try {
-      const r = await api.move(item.id, root, dir);
+      const r = await api.move(item.id, root, dir, !!item.rootSource);
       mask.remove();
       toast('已移动');
       closeDrawer();

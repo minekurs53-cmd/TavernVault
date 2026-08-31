@@ -10,10 +10,24 @@ import { openEditor, openBookEditor } from './editor.js';
 export const state = {
   meta: null,
   items: [],
-  filter: { kind: null, q: '', tag: null, fav: false, sort: 'name' },
+  // 筛选契约：filter 不持久化（刷新即重置）；仅 library 持久化到 localStorage('tv-library')
+  filter: { library: 'normal', kind: null, q: '', tag: null, fav: false, dir: null, root: null, sort: 'name' },
   view: localStorage.getItem('tv-view') || 'grid',
   selectedId: null,
 };
+
+// 当前逻辑库（meta.libraries 里找，找不到回退 normal）
+export function curLib() {
+  const libs = state.meta?.libraries || [];
+  return libs.find((l) => l.key === state.filter.library) || libs[0] || null;
+}
+
+// 切库：重置库内筛选（kind/dir/root/tag），保留搜索词/收藏/排序
+export function switchLibrary(key) {
+  Object.assign(state.filter, { library: key, kind: null, dir: null, root: null, tag: null });
+  localStorage.setItem('tv-library', key);
+  refreshItems();
+}
 
 const KIND_META = {
   character: { label: '角色卡', icon: 'character', color: '#d64f6f' },
@@ -38,12 +52,12 @@ export function renderSidebar() {
   const nav = $('#nav');
   nav.innerHTML = '';
 
+  const lib = curLib();
   const counts = {};
-  (meta?.kinds || []).forEach((k) => { counts[k.kind] = k.count; });
-  const total = meta?.total ?? 0;
-  $('#brand-count').textContent = `共 ${total} 个资源`;
+  (lib?.kinds || []).forEach((k) => { counts[k.kind] = k.count; });
+  $('#brand-count').textContent = lib ? `共 ${lib.total} 个资源` : '索引中…';
 
-  const mkItem = ({ key, label, ico, color, count, active, onClick }) => {
+  const mkItem = ({ label, ico, color, count, active, onClick }) => {
     const n = el(`
       <button class="nav-item ${active ? 'active' : ''}">
         ${color
@@ -56,13 +70,25 @@ export function renderSidebar() {
     return n;
   };
 
-  nav.appendChild(mkItem({
-    label: '全部资源', ico: 'all', count: total,
-    active: !state.filter.kind && !state.filter.fav && !state.filter.tag,
-    onClick: () => setFilter({ kind: null, fav: false, tag: null }),
-  }));
+  // 三逻辑库选项卡（始终显示，含未接入的库）
+  const tabs = $('#lib-tabs');
+  tabs.innerHTML = '';
+  (meta?.libraries || []).forEach((l) => {
+    const badge = l.key === 'tavernST' ? '<span class="root-badge tavernST">ST</span>'
+      : l.key === 'tavernTT' ? '<span class="root-badge tavernTT">TT</span>'
+        : `<span class="ico">${icon('folder')}</span>`;
+    const n = el(`
+      <button class="lib-tab ${state.filter.library === l.key ? 'active' : ''}">
+        ${badge}
+        <span class="lib-name">${escapeHtml(l.label)}</span>
+        <span class="count">${l.total}</span>
+      </button>`);
+    n.addEventListener('click', () => switchLibrary(l.key));
+    tabs.appendChild(n);
+  });
 
-  (meta?.kinds || []).forEach((k) => {
+  // 类型分区：当前库内计数
+  (lib?.kinds || []).forEach((k) => {
     const km = KIND_META[k.kind] || KIND_META.other;
     nav.appendChild(mkItem({
       label: km.label, color: km.color, count: k.count,
@@ -72,23 +98,48 @@ export function renderSidebar() {
   });
 
   nav.appendChild(mkItem({
-    label: '我的收藏', ico: 'star', count: '',
+    label: '我的收藏', ico: 'star', count: lib?.favorites || '',
     active: state.filter.fav,
-    onClick: () => setFilter({ kind: null, fav: true, tag: null }),
+    onClick: () => setFilter({ kind: null, fav: !state.filter.fav, tag: null }),
   }));
 
-  // 用户标签
-  const tags = meta?.userTags || [];
+  // 子目录二级导航：酒馆库按注册根（characters/worlds/...），普通库按相对目录
+  const dirs = lib?.dirs || [];
+  const dirSection = $('#dir-section');
+  dirSection.hidden = dirs.length === 0;
+  const dirBox = $('#nav-dirs');
+  dirBox.innerHTML = '';
+  const isTavern = state.filter.library !== 'normal';
+  dirs.forEach((d) => {
+    const label = isTavern
+      ? ((d.root || '').split(/[\\/]/).filter(Boolean).pop() || d.root)
+      : (d.dir || '（根目录）');
+    const active = isTavern ? state.filter.root === d.root : state.filter.dir === d.dir;
+    const n = el(`
+      <button class="nav-item ${active ? 'active' : ''}" title="${escapeHtml(isTavern ? d.root : d.dir)}">
+        <span class="ico">${icon('folder')}</span>
+        <span>${escapeHtml(label)}</span>
+        <span class="count">${d.count}</span>
+      </button>`);
+    n.addEventListener('click', () => isTavern
+      ? setFilter({ root: state.filter.root === d.root ? null : d.root, dir: null })
+      : setFilter({ dir: state.filter.dir === d.dir ? null : d.dir, root: null }));
+    dirBox.appendChild(n);
+  });
+
+  // 用户标签（当前库内计数）
+  const tags = lib?.tags || [];
   $('#tag-section').hidden = tags.length === 0;
   const tagBox = $('#nav-tags');
   tagBox.innerHTML = '';
   tags.forEach((t) => {
     const n = el(`
-      <button class="nav-item ${state.filter.tag === t ? 'active' : ''}">
+      <button class="nav-item ${state.filter.tag === t.tag ? 'active' : ''}">
         <span class="ico">${icon('tag')}</span>
-        <span>${escapeHtml(t)}</span>
+        <span>${escapeHtml(t.tag)}</span>
+        <span class="count">${t.count}</span>
       </button>`);
-    n.addEventListener('click', () => setFilter({ kind: null, fav: false, tag: state.filter.tag === t ? null : t }));
+    n.addEventListener('click', () => setFilter({ kind: null, fav: false, tag: state.filter.tag === t.tag ? null : t.tag }));
     tagBox.appendChild(n);
   });
 }
@@ -108,6 +159,9 @@ export async function refreshItems() {
       q: state.filter.q,
       tag: state.filter.tag || '',
       fav: state.filter.fav ? 'true' : '',
+      source: state.filter.library || '',
+      dir: state.filter.dir || '',
+      root: state.filter.root || '',
       sort: state.filter.sort,
     });
   } catch (e) {
@@ -130,22 +184,42 @@ export function renderContent() {
   grid.innerHTML = '';
   const items = state.items;
 
-  // 过滤条
+  // 过滤条：库本身不算筛选（当前库名由品牌区体现），任一库内筛选激活才显示
   const f = state.filter;
-  const label = f.q ? `搜索“${f.q}”` : f.tag ? `标签：${f.tag}` : f.fav ? '我的收藏' : '';
+  const lib = curLib();
+  const scopeLabel = f.root
+    ? `目录：${(f.root.split(/[\\/]/).filter(Boolean).pop() || f.root)}`
+    : f.dir
+      ? `目录：${f.dir}`
+      : '';
+  const label = f.q ? `搜索“${f.q}”`
+    : f.tag ? `标签：${f.tag}`
+      : f.fav ? '我的收藏'
+        : scopeLabel;
   $('#filter-bar').hidden = !label;
   if (label) $('#filter-label').textContent = `${label} · ${items.length} 个结果`;
 
   if (!items.length) {
     empty.hidden = false;
-    const noRoot = !state.meta || !state.meta.roots || state.meta.roots.length === 0;
     empty.innerHTML = '';
+    // 空态优先级：未配置根 → 引导配置；已配置但无资源 → 重扫提示；有筛选无结果 → 筛选空态
+    const noRoot = lib && lib.rootCount === 0;
+    const noItems = lib && lib.rootCount > 0 && lib.total === 0;
+    const heading = noRoot
+      ? (state.filter.library === 'normal' ? '还没有添加库目录' : `还没有接入${lib.label}`)
+      : noItems ? '该库还没有扫描到资源' : '这里空空如也';
+    const hint = noRoot
+      ? (state.filter.library === 'normal'
+        ? '在库设置中添加资源文件夹，即可自动识别角色卡、世界书与预设。'
+        : '在库设置中一键接入酒馆数据目录，即可在局外浏览与编辑酒馆资源。')
+      : noItems ? '点击左侧「重新扫描」同步磁盘内容。' : '换个分类或关键词试试';
+    const btn = noRoot ? '<button class="btn primary" id="btn-empty-settings">打开库设置</button>' : '';
     empty.appendChild(el(`
       <div>
         <div class="ico">${icon('folder')}</div>
-        <h3>${noRoot ? '还没有添加资源文件夹' : '这里空空如也'}</h3>
-        <div>${noRoot ? '在库设置中添加酒馆资源所在文件夹，即可自动识别角色卡、世界书与预设。' : '换个分类或关键词试试'}</div>
-        ${noRoot ? '<button class="btn primary" id="btn-empty-settings">添加文件夹</button>' : ''}
+        <h3>${heading}</h3>
+        <div>${hint}</div>
+        ${btn}
       </div>`));
     $('#btn-empty-settings', empty)?.addEventListener('click', () => {
       import('./main.js').then((m) => m.showSettings());
@@ -443,24 +517,35 @@ async function showBackups(item) {
 async function showMoveDialog(item) {
   const cats = await api.categories();
   const roots = state.meta.roots || [];
-  const options = cats.filter((c) => c.root === item.rootPath || roots.length === 1);
+  const checked = body => body.querySelector('input[name=mv-root]:checked')?.value || item.rootPath;
+  const optionsFor = (rootPath) => cats.filter((c) => c.root === rootPath);
+  // 目标根按来源分三组（条目所属来源的组排最前），跨库移动仍由后端护栏拦截
+  const order = { normal: 0, tavernST: 1, tavernTT: 2 };
+  const mySource = item.rootSource || 'normal';
+  const groups = ['normal', 'tavernST', 'tavernTT']
+    .map((s) => ({ source: s, roots: roots.filter((r) => (r.source || 'normal') === s) }))
+    .filter((g) => g.roots.length > 0)
+    .sort((a, b) => (a.source === mySource ? -1 : b.source === mySource ? 1 : order[a.source] - order[b.source]));
+  const groupHtml = (g) => `
+    <div class="m-section-title">${g.source === 'normal' ? '局外存储' : g.source === 'tavernST' ? 'SillyTavern' : 'TauriTavern'}</div>
+    ${g.roots.map((r) => `
+      <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 2px">
+        <input type="radio" name="mv-root" value="${escapeHtml(r.path)}" ${r.path === item.rootPath ? 'checked' : ''}>
+        <span>${escapeHtml(r.path)}</span>
+        ${r.source !== 'normal' ? `<span class="root-badge ${r.source}">${r.source === 'tavernST' ? 'ST' : 'TT'}</span>` : ''}
+      </label>`).join('')}`;
+  const catsHtml = (list) => list.map((c) => `
+      <label><input type="radio" name="mv-dir" value="${escapeHtml(c.dir)}">
+        <span>${c.dir ? escapeHtml(c.dir) : '（根目录）'}</span><span class="cnt">${c.count}</span>
+      </label>`).join('') || '<p style="font-size:12px">暂无目录</p>';
   const body = el(`
     <div>
       <h3>移动“${escapeHtml(nameOf(item))}”</h3>
       <p>选择目标库根目录与子目录（不存在会自动创建）。</p>
-      <div class="m-section-title">库根目录</div>
-      ${roots.map((r, i) => `
-        <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 2px">
-          <input type="radio" name="mv-root" value="${escapeHtml(r.path)}" ${r.path === item.rootPath ? 'checked' : ''}>
-          <span>${escapeHtml(r.path)}</span>
-          ${r.source !== 'normal' ? `<span class="root-badge ${r.source}">${r.source === 'tavernST' ? 'ST' : 'TT'}</span>` : ''}
-        </label>`).join('')}
+      ${groups.map(groupHtml).join('')}
       <div class="m-section-title">常用目录</div>
       <div class="radio-list" id="mv-cats">
-        ${options.map((c) => `
-          <label><input type="radio" name="mv-dir" value="${escapeHtml(c.dir)}">
-            <span>${c.dir ? escapeHtml(c.dir) : '（根目录）'}</span><span class="cnt">${c.count}</span>
-          </label>`).join('') || '<p style="font-size:12px">暂无目录</p>'}
+        ${catsHtml(optionsFor(item.rootPath))}
       </div>
       <input type="text" id="mv-custom" placeholder="或输入子目录，如：世界书/NSFW">
       <div class="m-actions">
@@ -470,6 +555,12 @@ async function showMoveDialog(item) {
     </div>`);
 
   const mask = openModal(body);
+  // 切换目标根时，常用目录联动刷新
+  body.querySelectorAll('input[name=mv-root]').forEach((r) => {
+    r.addEventListener('change', () => {
+      body.querySelector('#mv-cats').innerHTML = catsHtml(optionsFor(checked(body)));
+    });
+  });
   body.querySelector('#mv-custom').addEventListener('input', (e) => {
     if (e.target.value) body.querySelectorAll('input[name=mv-dir]').forEach((r) => { r.checked = false; });
   });
@@ -477,7 +568,7 @@ async function showMoveDialog(item) {
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
     if (act === 'cancel') { mask.remove(); return; }
-    const root = body.querySelector('input[name=mv-root]:checked')?.value || item.rootPath;
+    const root = checked(body);
     const custom = body.querySelector('#mv-custom').value.trim();
     const dir = custom || body.querySelector('input[name=mv-dir]:checked')?.value || '';
     if (item.rootSource) {

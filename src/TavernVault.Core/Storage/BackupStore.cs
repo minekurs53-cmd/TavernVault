@@ -21,8 +21,8 @@ public class BackupInfo
 public sealed class BackupStore
 {
     private readonly object _lock = new();
-    private readonly string _dir;
-    private readonly string _manifestPath;
+    private string _dir;
+    private string _manifestPath;
     private List<BackupInfo> _manifest = [];
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -31,12 +31,55 @@ public sealed class BackupStore
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    public BackupStore(string dataDir)
+    public BackupStore(string dataDir, string? backupRootPath = null)
     {
-        _dir = Path.Combine(dataDir, "backups");
+        _dir = string.IsNullOrWhiteSpace(backupRootPath)
+            ? Path.Combine(dataDir, "backups")
+            : Path.GetFullPath(backupRootPath.Trim());
         Directory.CreateDirectory(_dir);
         _manifestPath = Path.Combine(_dir, "manifest.json");
         Load();
+    }
+
+    /// <summary>当前备份目录（供设置界面回显）。</summary>
+    public string Dir => _dir;
+
+    /// <summary>
+    /// 更换备份目录：移动现有备份文件与 manifest 到新目录。
+    /// 旧目录在搬空后尝试删除。抛 IOException/UnauthorizedAccessException 时不改变现有状态。
+    /// </summary>
+    public void RelocateTo(string newDir)
+    {
+        var target = Path.GetFullPath(newDir);
+        lock (_lock)
+        {
+            if (string.Equals(Path.GetFullPath(_dir), target, StringComparison.OrdinalIgnoreCase))
+                return;
+            Directory.CreateDirectory(target);
+
+            var moved = new List<BackupInfo>();
+            foreach (var info in _manifest.ToList())
+            {
+                var src = PathFor(info);
+                var dst = Path.Combine(target, Path.GetFileName(src));
+                try
+                {
+                    if (File.Exists(src)) File.Move(src, dst);
+                    moved.Add(info);
+                }
+                catch (IOException) { moved.Add(info); } // 源文件丢了也保留记录
+            }
+
+            var oldManifest = _manifestPath;
+            var oldDir = _dir;
+            _manifest = moved;
+            _dir = target;
+            _manifestPath = Path.Combine(target, "manifest.json");
+            Save();
+
+            try { if (File.Exists(oldManifest)) File.Delete(oldManifest); } catch (IOException) { }
+            try { if (!Directory.EnumerateFileSystemEntries(oldDir).Any()) Directory.Delete(oldDir); } catch (IOException) { }
+        }
     }
 
     /// <summary>在覆盖写入前备份文件。失败返回 null 且不抛出。</summary>

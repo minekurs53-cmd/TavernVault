@@ -74,12 +74,13 @@ public static class ApiServer
         app.MapGet("/api/meta", () =>
         {
             var (tags, total) = vault.AllUserTags();
+            var libraries = vault.BuildLibraries();
             var kinds = ItemKindText.All
                 .Select(a => new
                 {
                     kind = ItemKindText.KeyOf(a.Kind),
                     label = a.Label,
-                    count = vault.Query(new QueryParams { Kind = a.Kind }).Count,
+                    count = libraries.Sum(l => l.Kinds.First(k => k.Kind == a.Key).Count),
                 })
                 .ToList();
             return Json(new
@@ -88,6 +89,17 @@ public static class ApiServer
                 kinds,
                 userTags = tags,
                 roots = SerializeRoots(vault),
+                libraries = libraries.Select(l => new
+                {
+                    key = l.Key,
+                    label = l.Label,
+                    total = l.Total,
+                    rootCount = l.RootCount,
+                    favorites = l.Favorites,
+                    kinds = l.Kinds.Select(k => new { kind = k.Kind, label = k.Label, count = k.Count }),
+                    dirs = l.Dirs.Select(d => new { root = d.Root, dir = d.Dir, count = d.Count }),
+                    tags = l.Tags.Select(t => new { tag = t.Tag, count = t.Count }),
+                }).ToList(),
                 lastScanAt = vault.LastScanAt,
                 version = typeof(ApiServer).Assembly.GetName().Version?.ToString(3),
             });
@@ -100,8 +112,16 @@ public static class ApiServer
         }));
 
         // ---------- 条目查询 ----------
-        app.MapGet("/api/items", (string? kind, string? q, string? tag, bool? fav, string? sort, string? dir) =>
+        app.MapGet("/api/items", (string? kind, string? q, string? tag, bool? fav, string? sort, string? dir, string? root, string? source) =>
         {
+            LibrarySource? src = null;
+            if (!string.IsNullOrEmpty(source))
+            {
+                // 严格契约：非法来源返回 400，不静默当作 Normal
+                if (source is not ("normal" or "tavernST" or "tavernTT"))
+                    return Err("无效的库来源", 400);
+                src = ParseSource(source);
+            }
             var p = new QueryParams
             {
                 Kind = kind is { Length: > 0 } && Enum.TryParse<ItemKind>(kind, true, out var k) ? k : null,
@@ -110,6 +130,8 @@ public static class ApiServer
                 Favorite = fav,
                 Sort = sort ?? "name",
                 Dir = dir,
+                RootPath = root,
+                Source = src,
             };
             return Json(vault.Query(p));
         });
@@ -436,7 +458,15 @@ public static class ApiServer
         app.MapGet("/api/backups/stats", () =>
         {
             var (count, bytes) = vault.Backups.Stats();
-            return Json(new { count, bytes, autoBackup = vault.Settings.AutoBackup, maxPerFile = vault.Settings.MaxBackupsPerFile });
+            return Json(new
+            {
+                count,
+                bytes,
+                autoBackup = vault.Settings.AutoBackup,
+                maxPerFile = vault.Settings.MaxBackupsPerFile,
+                dir = vault.Backups.Dir,
+                defaultDir = Path.Combine(vault.DataDir, "backups"),
+            });
         });
 
         app.MapPost("/api/settings/backup", async (HttpRequest req) => await HandleAsync(async () =>
@@ -446,8 +476,28 @@ public static class ApiServer
             if (body?["maxPerFile"] is JsonValue mx && mx.TryGetValue<int>(out var max))
                 vault.Settings.MaxBackupsPerFile = Math.Clamp(max, 1, 50);
             vault.Backups.MaxPerFile = Math.Clamp(vault.Settings.MaxBackupsPerFile, 1, 50);
+            if (body?["backupDir"] is JsonValue bd)
+            {
+                var dir = bd.GetValue<string>().Trim();
+                try
+                {
+                    if (dir.Length == 0) vault.SetBackupRoot(null);
+                    else if (!Path.IsPathRooted(dir)) return Err("备份位置必须是绝对路径", 400);
+                    else vault.SetBackupRoot(dir);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+                {
+                    return Err($"无法使用该备份位置：{ex.Message}", 400);
+                }
+            }
             vault.SaveSettings();
-            return Json(new { ok = true, autoBackup = vault.Settings.AutoBackup, maxPerFile = vault.Settings.MaxBackupsPerFile });
+            return Json(new
+            {
+                ok = true,
+                autoBackup = vault.Settings.AutoBackup,
+                maxPerFile = vault.Settings.MaxBackupsPerFile,
+                dir = vault.Backups.Dir,
+            });
         }));
 
         // ---------- 文件操作 ----------
@@ -634,7 +684,12 @@ public static class ApiServer
 
     // ---- 库根序列化 / 来源解析 ----
     private static List<object> SerializeRoots(Vault v) =>
-        v.Settings.LibraryRoots.Select(r => (object)new { path = r.Path, source = SourceKey(r.Source) }).ToList();
+        v.Settings.LibraryRoots.Select(r => (object)new
+        {
+            path = r.Path,
+            source = SourceKey(r.Source),
+            count = v.Query(new QueryParams { RootPath = r.Path }).Count,
+        }).ToList();
 
     private static string SourceKey(LibrarySource s) => s switch
     {

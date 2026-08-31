@@ -40,6 +40,12 @@ export async function showSettings() {
     </div>
     <div class="field" style="max-width:220px"><label>每个文件保留备份份数</label>
       <input type="text" id="set-maxbackups" inputmode="numeric"></div>
+    <div class="field"><label>备份存储位置（留空 = 默认位置）</label>
+      <div class="add-root-row">
+        <input type="text" id="set-backup-dir" placeholder="默认位置">
+        <button class="btn" id="set-backup-pick"><span class="ico">${icon('folder')}</span>浏览…</button>
+      </div>
+    </div>
     <div class="m-actions">
       <button class="btn" data-act="rescan"><span class="ico">${icon('refresh')}</span>重新扫描</button>
       <button class="btn primary" data-act="close">完成</button>
@@ -55,9 +61,14 @@ export async function showSettings() {
   const stats = await get('/api/backups/stats').catch(() => null);
   const autoCb = body.querySelector('#set-autobackup');
   const maxInput = body.querySelector('#set-maxbackups');
+  const dirInput = body.querySelector('#set-backup-dir');
+  let curDir = '';
   if (stats) {
     autoCb.checked = !!stats.autoBackup;
     maxInput.value = stats.maxPerFile;
+    curDir = stats.dir || '';
+    dirInput.value = curDir;
+    dirInput.placeholder = stats.defaultDir ? `默认：${stats.defaultDir}` : '默认位置';
   }
   const saveBackupSettings = async () => {
     const max = Math.min(50, Math.max(1, parseInt(maxInput.value, 10) || 5));
@@ -66,6 +77,37 @@ export async function showSettings() {
   };
   autoCb.addEventListener('change', saveBackupSettings);
   maxInput.addEventListener('change', saveBackupSettings);
+
+  dirInput.addEventListener('change', async () => {
+    const v = dirInput.value.trim();
+    if (v === curDir) return;
+    const ok = await confirmDialog({
+      title: '更改备份位置',
+      message: v
+        ? `现有备份会一并移动到新位置：${v}。继续？`
+        : '恢复默认备份位置？现有备份会移动回去。',
+      okText: '移动并切换',
+    });
+    if (!ok) { dirInput.value = curDir; return; }
+    try {
+      const r = await post('/api/settings/backup', { backupDir: v });
+      curDir = r.dir || '';
+      dirInput.value = curDir;
+      toast('备份位置已更新');
+    } catch (e) {
+      dirInput.value = curDir;
+      toast(e.message, 'err');
+    }
+  });
+  body.querySelector('#set-backup-pick').addEventListener('click', async () => {
+    try {
+      const r = await api.pickFolder();
+      if (r?.path) {
+        dirInput.value = r.path;
+        dirInput.dispatchEvent(new Event('change'));
+      }
+    } catch (e) { toast(e.message, 'err'); }
+  });
 
   const renderRoots = () => {
     const box = body.querySelector('.root-list');
@@ -225,7 +267,7 @@ async function boot() {
   $('#btn-rescan').addEventListener('click', doRescan);
   $('#btn-settings').addEventListener('click', showSettings);
   $('#filter-clear').addEventListener('click', () => {
-    Object.assign(state.filter, { kind: null, tag: null, fav: false, q: '' });
+    Object.assign(state.filter, { kind: null, tag: null, fav: false, q: '', root: null });
     $('#search').value = '';
     refreshItems();
   });

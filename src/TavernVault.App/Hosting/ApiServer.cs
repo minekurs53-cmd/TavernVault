@@ -100,7 +100,7 @@ public static class ApiServer
         }));
 
         // ---------- 条目查询 ----------
-        app.MapGet("/api/items", (string? kind, string? q, string? tag, bool? fav, string? sort, string? dir) =>
+        app.MapGet("/api/items", (string? kind, string? q, string? tag, bool? fav, string? sort, string? dir, string? root) =>
         {
             var p = new QueryParams
             {
@@ -110,6 +110,7 @@ public static class ApiServer
                 Favorite = fav,
                 Sort = sort ?? "name",
                 Dir = dir,
+                RootPath = root,
             };
             return Json(vault.Query(p));
         });
@@ -436,7 +437,15 @@ public static class ApiServer
         app.MapGet("/api/backups/stats", () =>
         {
             var (count, bytes) = vault.Backups.Stats();
-            return Json(new { count, bytes, autoBackup = vault.Settings.AutoBackup, maxPerFile = vault.Settings.MaxBackupsPerFile });
+            return Json(new
+            {
+                count,
+                bytes,
+                autoBackup = vault.Settings.AutoBackup,
+                maxPerFile = vault.Settings.MaxBackupsPerFile,
+                dir = vault.Backups.Dir,
+                defaultDir = Path.Combine(vault.DataDir, "backups"),
+            });
         });
 
         app.MapPost("/api/settings/backup", async (HttpRequest req) => await HandleAsync(async () =>
@@ -446,8 +455,28 @@ public static class ApiServer
             if (body?["maxPerFile"] is JsonValue mx && mx.TryGetValue<int>(out var max))
                 vault.Settings.MaxBackupsPerFile = Math.Clamp(max, 1, 50);
             vault.Backups.MaxPerFile = Math.Clamp(vault.Settings.MaxBackupsPerFile, 1, 50);
+            if (body?["backupDir"] is JsonValue bd)
+            {
+                var dir = bd.GetValue<string>().Trim();
+                try
+                {
+                    if (dir.Length == 0) vault.SetBackupRoot(null);
+                    else if (!Path.IsPathRooted(dir)) return Err("备份位置必须是绝对路径", 400);
+                    else vault.SetBackupRoot(dir);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+                {
+                    return Err($"无法使用该备份位置：{ex.Message}", 400);
+                }
+            }
             vault.SaveSettings();
-            return Json(new { ok = true, autoBackup = vault.Settings.AutoBackup, maxPerFile = vault.Settings.MaxBackupsPerFile });
+            return Json(new
+            {
+                ok = true,
+                autoBackup = vault.Settings.AutoBackup,
+                maxPerFile = vault.Settings.MaxBackupsPerFile,
+                dir = vault.Backups.Dir,
+            });
         }));
 
         // ---------- 文件操作 ----------
@@ -634,7 +663,12 @@ public static class ApiServer
 
     // ---- 库根序列化 / 来源解析 ----
     private static List<object> SerializeRoots(Vault v) =>
-        v.Settings.LibraryRoots.Select(r => (object)new { path = r.Path, source = SourceKey(r.Source) }).ToList();
+        v.Settings.LibraryRoots.Select(r => (object)new
+        {
+            path = r.Path,
+            source = SourceKey(r.Source),
+            count = v.Query(new QueryParams { RootPath = r.Path }).Count,
+        }).ToList();
 
     private static string SourceKey(LibrarySource s) => s switch
     {

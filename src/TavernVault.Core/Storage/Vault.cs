@@ -11,6 +11,7 @@ public class QueryParams
     public string? UserTag { get; set; }
     public bool? Favorite { get; set; }
     public string? Dir { get; set; }
+    public string? RootPath { get; set; }
     public string Sort { get; set; } = "name"; // name | modified | size | kind
 }
 
@@ -28,14 +29,30 @@ public sealed class Vault
 
     public AppSettings Settings { get; private set; }
     public DateTime LastScanAt { get; private set; }
+    public string DataDir => _store.DataDir;
 
     public Vault(SettingsStore? store = null)
     {
         _store = store ?? new SettingsStore();
         Settings = _store.LoadSettings();
         Items = _store.LoadIndex();
-        Backups = new BackupStore(_store.DataDir) { MaxPerFile = Settings.MaxBackupsPerFile };
+        Backups = new BackupStore(_store.DataDir, Settings.BackupRootPath) { MaxPerFile = Settings.MaxBackupsPerFile };
         Backups.RetentionFor = path => RetentionFor(RootContaining(path));
+    }
+
+    /// <summary>
+    /// 更换备份目录（null/空 = 恢复数据目录默认位置）。现有备份会被移动过去。
+    /// </summary>
+    public string SetBackupRoot(string? path)
+    {
+        lock (_lock)
+        {
+            var dir = string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(path.Trim());
+            Settings.BackupRootPath = dir;
+            Backups.RelocateTo(dir ?? Path.Combine(_store.DataDir, "backups"));
+            _store.SaveSettings(Settings);
+            return Backups.Dir;
+        }
     }
 
     private int RetentionFor(LibraryRoot? root)
@@ -81,6 +98,8 @@ public sealed class Vault
 
             if (p.Kind is { } kind) q = q.Where(i => i.Kind == kind);
             if (p.Favorite is { } fav) q = q.Where(i => i.Favorite == fav);
+            if (!string.IsNullOrEmpty(p.RootPath))
+                q = q.Where(i => string.Equals(i.RootPath, p.RootPath, StringComparison.OrdinalIgnoreCase));
             if (!string.IsNullOrEmpty(p.UserTag))
                 q = q.Where(i => i.UserTags.Contains(p.UserTag, StringComparer.OrdinalIgnoreCase));
             if (!string.IsNullOrEmpty(p.Dir))

@@ -10,7 +10,7 @@ import { openEditor, openBookEditor } from './editor.js';
 export const state = {
   meta: null,
   items: [],
-  filter: { kind: null, q: '', tag: null, fav: false, sort: 'name' },
+  filter: { kind: null, q: '', tag: null, fav: false, root: null, sort: 'name' },
   view: localStorage.getItem('tv-view') || 'grid',
   selectedId: null,
 };
@@ -58,8 +58,8 @@ export function renderSidebar() {
 
   nav.appendChild(mkItem({
     label: '全部资源', ico: 'all', count: total,
-    active: !state.filter.kind && !state.filter.fav && !state.filter.tag,
-    onClick: () => setFilter({ kind: null, fav: false, tag: null }),
+    active: !state.filter.kind && !state.filter.fav && !state.filter.tag && !state.filter.root,
+    onClick: () => setFilter({ kind: null, fav: false, tag: null, root: null }),
   }));
 
   (meta?.kinds || []).forEach((k) => {
@@ -76,6 +76,28 @@ export function renderSidebar() {
     active: state.filter.fav,
     onClick: () => setFilter({ kind: null, fav: true, tag: null }),
   }));
+
+  // 库（按库根分组：局外库与酒馆库分开浏览）
+  const roots = meta?.roots || [];
+  const rootSection = $('#root-section');
+  rootSection.hidden = roots.length === 0;
+  const rootBox = $('#nav-roots');
+  rootBox.innerHTML = '';
+  roots.forEach((r) => {
+    const badge = r.source === 'tavernST' ? '<span class="root-badge tavernST">ST</span>'
+      : r.source === 'tavernTT' ? '<span class="root-badge tavernTT">TT</span>'
+        : `<span class="ico">${icon('folder')}</span>`;
+    const label = (r.path || '').split(/[\\/]/).filter(Boolean).pop() || r.path;
+    const n = el(`
+      <button class="nav-item ${state.filter.root === r.path ? 'active' : ''}" title="${escapeHtml(r.path)}">
+        ${badge}
+        <span>${escapeHtml(label)}</span>
+        <span class="count">${r.count ?? ''}</span>
+      </button>`);
+    n.addEventListener('click', () =>
+      setFilter({ root: state.filter.root === r.path ? null : r.path }));
+    rootBox.appendChild(n);
+  });
 
   // 用户标签
   const tags = meta?.userTags || [];
@@ -108,6 +130,7 @@ export async function refreshItems() {
       q: state.filter.q,
       tag: state.filter.tag || '',
       fav: state.filter.fav ? 'true' : '',
+      root: state.filter.root || '',
       sort: state.filter.sort,
     });
   } catch (e) {
@@ -132,7 +155,13 @@ export function renderContent() {
 
   // 过滤条
   const f = state.filter;
-  const label = f.q ? `搜索“${f.q}”` : f.tag ? `标签：${f.tag}` : f.fav ? '我的收藏' : '';
+  const rootLabel = f.root
+    ? `库：${(f.root.split(/[\\/]/).filter(Boolean).pop() || f.root)}`
+    : '';
+  const label = f.q ? `搜索“${f.q}”`
+    : f.tag ? `标签：${f.tag}`
+      : f.fav ? '我的收藏'
+        : rootLabel;
   $('#filter-bar').hidden = !label;
   if (label) $('#filter-label').textContent = `${label} · ${items.length} 个结果`;
 

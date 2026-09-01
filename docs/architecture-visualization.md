@@ -1,7 +1,7 @@
 # TavernVault 架构与流程可视化
 
 > 配套 `docs/development-handoff.md` §2-§3 的图集。所有图为 Mermaid 源码，可在 GitHub / VS Code（Mermaid 插件）直接渲染。
-> 最后更新：2026-08-31 · 对应 v0.4.2
+> 最后更新：2026-09-01 · 对应 v0.4.3
 
 ## 1. 系统分层架构
 
@@ -65,7 +65,7 @@ flowchart TD
     Start(["App.OnStartup"]) --> Parse["解析命令行参数<br/>--server / --port= / --data="]
     Parse --> Build["ApiServer.Build"]
     Build --> Default{"首次运行?<br/>LibraryRoots 为空"}
-    Default -->|"是"| Guess["EnsureDefaultRoot<br/>探测 D:\\agent\\酒馆PR 等候选"]
+    Default -->|"是"| Guess["EnsureDefaultRoot<br/>探测 %USERPROFILE%\酒馆PR 等约定路径"]
     Default -->|"否"| Vault["new Vault(settingsStore)<br/>加载设置 + 索引 + 备份存储"]
     Guess --> Vault
     Vault --> Listen["Kestrel 监听<br/>127.0.0.1:随机或指定端口"]
@@ -227,7 +227,7 @@ flowchart TD
 
 ```mermaid
 graph TD
-    subgraph Repo["D:\agent\TavernVault (源码)"]
+    subgraph Repo["TavernVault 仓库 (源码, 位置因机器而异)"]
         SLNX["TavernVault.slnx"]
         SRC["src/"] --> CORE["TavernVault.Core/"]
         SRC --> APP["TavernVault.App/<br/>bin/Release/net10.0-windows/<br/>TavernVault.exe + wwwroot"]
@@ -245,9 +245,9 @@ graph TD
     end
 
     subgraph Libraries["库根 (用户资源, 只读扫描+用户主动写)"]
-        PR["D:\agent\酒馆PR (Normal)"]
-        ST["D:\agent\SillyTavern\data\default-user (TavernST)"]
-        TT["D:\agent\TauriTavern\cache\default-user (TavernTT)"]
+        PR["局外资源根<br/>如 %USERPROFILE%\酒馆PR (Normal)"]
+        ST["SillyTavern\data\default-user (TavernST)"]
+        TT["TauriTavern\cache\default-user (TavernTT)"]
     end
 
     APP -.->|扫描/编辑| Libraries
@@ -266,6 +266,7 @@ timeline
     v0.4.0 : 酒馆接入 : 库根来源标记 : 检测/接入端点 : 安全护栏
     v0.4.1 : 侧栏库分组选项卡 : 备份位置自定义 : 项目文档体系
     v0.4.2 : 三逻辑库选项卡 : 每库独立分类+二级子目录 : 来源过滤+冷升级自愈
+    v0.4.3 : 侧栏手风琴(单开互斥) : 滚动隔离布局 : 酒馆探测去硬编码+可移植性起步
 ```
 
 ## 12. 风险与防护措施对照

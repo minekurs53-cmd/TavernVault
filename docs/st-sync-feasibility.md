@@ -1,7 +1,8 @@
 # 酒馆项目接入可行性分析
 
 > 目标：在酒馆资源管家里编辑的内容，直接同步生效于本机部署的两个酒馆项目——
-> 原版 SillyTavern（`D:\agent\SillyTavern`）与类酒馆项目 TauriTavern（`D:\agent\TauriTavern`）。
+> 原版 SillyTavern 与类酒馆项目 TauriTavern（安装位置因机器而异，由 `TavernDetector` 探测：
+> 环境变量 `TV_SILLYTAVERN_DATA` / `TV_TAURITAVERN_DATA` 优先，其次 `%USERPROFILE%` 约定路径）。
 
 ## 一、两个项目的数据存放位置（已实测确认）
 
@@ -43,11 +44,11 @@
 
 ```
 库根注册（接入向导一次性完成）：
-D:\agent\SillyTavern\data\default-user\characters      → 标记"酒馆源·ST·角色卡"
-D:\agent\SillyTavern\data\default-user\worlds          → 标记"酒馆源·ST·世界书"
-D:\agent\SillyTavern\data\default-user\OpenAI Settings → 标记"酒馆源·ST·预设"
-D:\agent\SillyTavern\data\default-user\themes          → 标记"酒馆源·ST·美化"
-D:\agent\TauriTavern\cache\default-user\…（同上四个）    → 标记"酒馆源·TT·…"
+<ST数据目录>\data\default-user\characters      → 标记"酒馆源·ST·角色卡"
+…\data\default-user\worlds                     → 标记"酒馆源·ST·世界书"
+…\data\default-user\OpenAI Settings            → 标记"酒馆源·ST·预设"
+…\data\default-user\themes                     → 标记"酒馆源·ST·美化"
+<TT数据目录>\cache\default-user\…（同上四个）  → 标记"酒馆源·TT·…"
 ```
 
 护栏（同步安全的核心，开发量小）：

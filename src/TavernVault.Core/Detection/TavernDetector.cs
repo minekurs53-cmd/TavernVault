@@ -2,28 +2,37 @@ using TavernVault.Core.Models;
 
 namespace TavernVault.Core.Detection;
 
-/// <summary>检测本机 SillyTavern / TauriTavern 安装目录。</summary>
+/// <summary>检测本机 SillyTavern / TauriTavern 安装目录。不包含任何机器特定路径：优先环境变量，回退用户目录约定。</summary>
 public static class TavernDetector
 {
     public static readonly string[] Subdirs =
         ["characters", "worlds", "OpenAI Settings", "themes", "regex"];
 
-    /// <summary>检测 SillyTavern 数据目录（D:\agent\SillyTavern\data\default-user\）。</summary>
+    /// <summary>
+    /// 检测酒馆数据目录。候选顺序：环境变量（TV_SILLYTAVERN_DATA / TV_TAURITAVERN_DATA）
+    /// → 用户目录约定（%USERPROFILE%\SillyTavern\data\default-user 等）。校验需含 characters 子目录。
+    /// </summary>
     public static string? DetectSillyTavern()
-    {
-        var baseDir = @"D:\agent\SillyTavern\data\default-user";
-        if (!Directory.Exists(baseDir)) return null;
-        if (!Directory.Exists(Path.Combine(baseDir, "characters"))) return null;
-        return baseDir;
-    }
+        => Detect("TV_SILLYTAVERN_DATA",
+            Path.Combine(UserHome, "SillyTavern", "data", "default-user"));
 
-    /// <summary>检测 TauriTavern 缓存目录（D:\agent\TauriTavern\cache\default-user\）。</summary>
     public static string? DetectTauriTavern()
+        => Detect("TV_TAURITAVERN_DATA",
+            Path.Combine(UserHome, "TauriTavern", "cache", "default-user"));
+
+    private static string UserHome =>
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+    private static string? Detect(string envVar, string fallback)
     {
-        var baseDir = @"D:\agent\TauriTavern\cache\default-user";
-        if (!Directory.Exists(baseDir)) return null;
-        if (!Directory.Exists(Path.Combine(baseDir, "characters"))) return null;
-        return baseDir;
+        foreach (var dir in new[] { Environment.GetEnvironmentVariable(envVar), fallback })
+        {
+            if (string.IsNullOrWhiteSpace(dir)) continue;
+            if (!Directory.Exists(dir)) continue;
+            if (!Directory.Exists(Path.Combine(dir, "characters"))) continue;
+            return dir;
+        }
+        return null;
     }
 
     /// <summary>返回检测到的所有酒馆及其可注册子目录。</summary>

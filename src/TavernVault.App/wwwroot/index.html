@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>酒馆资源管家</title>
-<link rel="stylesheet" href="css/app.css?v=0.4.2">
+<link rel="stylesheet" href="css/app.css?v=0.4.3">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏺</text></svg>">
 </head>
 <body>
@@ -20,16 +20,19 @@
 
     <section id="lib-tabs" class="lib-tabs"></section>
 
-    <nav id="nav"></nav>
-
-    <section class="side-section" id="dir-section" hidden>
-      <h2>子目录</h2>
-      <div id="nav-dirs"></div>
+    <section class="acc open" id="acc-kind">
+      <button class="acc-head" type="button"><span>分类</span><span class="acc-chevron"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span></button>
+      <div class="acc-body"><div class="acc-inner"><nav id="nav"></nav></div></div>
     </section>
 
-    <section class="side-section" id="tag-section" hidden>
-      <h2>我的标签</h2>
-      <div id="nav-tags"></div>
+    <section class="acc" id="acc-dir">
+      <button class="acc-head" type="button"><span>子目录</span><span class="acc-chevron"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span></button>
+      <div class="acc-body"><div class="acc-inner"><div id="nav-dirs"></div></div></div>
+    </section>
+
+    <section class="acc" id="acc-tag">
+      <button class="acc-head" type="button"><span>我的标签</span><span class="acc-chevron"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span></button>
+      <div class="acc-body"><div class="acc-inner"><div id="nav-tags"></div></div></div>
     </section>
 
     <div class="side-spacer"></div>
@@ -89,6 +92,6 @@ window.__errs = [];
 window.addEventListener('error', e => { window.__errs.push('ERR: ' + e.message + ' @ ' + (e.filename||'') + ':' + (e.lineno||'')); });
 window.addEventListener('unhandledrejection', e => { window.__errs.push('REJ: ' + ((e.reason && e.reason.message) || e.reason)); });
 </script>
-<script type="module" src="js/main.js?v=0.4.2"></script>
+<script type="module" src="js/main.js?v=0.4.3"></script>
 </body>
 </html>

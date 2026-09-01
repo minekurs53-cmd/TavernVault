@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.4.2（工作区，未提交）** · 最后更新：2026-08-31
+> 当前版本：**v0.4.3（工作区，未提交）** · 最后更新：2026-09-01
 
 ---
 
@@ -17,11 +17,11 @@
 
 为 SillyTavern（酒馆）玩家做的 **Windows 桌面资源管理器**：把散落在文件夹里的角色卡 / 世界书 / 预设 / 美化主题 / 脚本集中索引、检索、编辑、整理，并与本机部署的酒馆项目打通（v0.4.0 起）。
 
-- 源码：`D:\agent\TavernVault`
-- 用户真实资源库（只读扫描，绝不主动改动）：`D:\agent\酒馆PR`
-- 两个酒馆项目（接入目标，见 `docs/st-sync-feasibility.md`）：
-  - 原版 SillyTavern：`D:\agent\SillyTavern`，数据在 `data\default-user\`
-  - TauriTavern：`D:\agent\TauriTavern`，数据在 `cache\default-user\`（`default\` 是出厂副本，禁止编辑）
+- 源码：本仓库根目录（`TavernVault.slnx` 所在目录）
+- 用户真实资源库（只读扫描，绝不主动改动）：局外普通目录（如 `%USERPROFILE%\酒馆PR`，因人而异，一律通过"库设置"注册）
+- 两个酒馆项目（接入目标，见 `docs/st-sync-feasibility.md`；安装位置因机器而异，由 `TavernDetector` 探测）：
+  - 原版 SillyTavern：数据在 `<安装目录>\data\default-user\`
+  - TauriTavern：数据在 `<安装目录>\cache\default-user\`（`default\` 是出厂副本，禁止编辑）
 
 一句话设计哲学：**用户的资源文件是圣域**——程序只做"读内容建索引 + 用户主动触发才写"，所有覆盖写入前自动备份，删除进回收站，酒馆源文件额外加护栏。
 
@@ -42,7 +42,7 @@
 |---|---|
 | `src/TavernVault.Core` | 无 UI 依赖的核心库：PNG 数据块、角色卡/内嵌书读写、类型识别、扫描索引、设置/索引/备份持久化、文件操作。可单测 |
 | `src/TavernVault.App` | WPF 外壳 + `Hosting/ApiServer.cs`（全部 REST 端点）+ `wwwroot` 前端 + `Services`（缩略图、文件夹选择器） |
-| `tests/TavernVault.Core.Tests` | xUnit 单元测试（当前 36 项） |
+| `tests/TavernVault.Core.Tests` | xUnit 单元测试（当前 41 项） |
 
 ### 请求处理链路
 
@@ -159,7 +159,7 @@ App：
   批量注册为带来源标记的库根（去重 + 自动重扫）。
 - **护栏**：`RootSource != Normal` 的条目重命名/移动默认 **403**（酒馆聊天记录按文件名/路径引用角色卡），
   请求体带 `force:true` 才放行（前端弹风险确认框）。写前强制备份 + TT 高保留份数兜底。
-- **默认库**：首次运行 `EnsureDefaultRoot` 自动把 `D:\agent\酒馆PR`（或 `%USERPROFILE%\酒馆PR`）注册为普通库。
+- **默认库**：首次运行 `EnsureDefaultRoot` 探测 `%USERPROFILE%\酒馆PR`，存在才注册为普通库；不存在则保持空库，由前端空态引导添加。酒馆数据目录可通过环境变量 `TV_SILLYTAVERN_DATA` / `TV_TAURITAVERN_DATA` 显式指定。
 
 ### 3.8 三逻辑库选项卡（v0.4.1 → v0.4.2）
 
@@ -172,6 +172,14 @@ v0.4.1 引入库根分组（侧栏逐根列出），但接入酒馆后每个酒�
 - **二级子目录**：酒馆库二级用 `root` 参数（`RelativeDir` 相对各根，characters 根与 worlds 根的顶层文件 RelativeDir 均为 `""`，dir 参数无法区分功能分区）；普通库二级用 `dir` 参数。均与 `source` AND 叠加。
 - **空态优先级**：`rootCount===0` → 引导（Normal「添加根目录」/ 酒馆「一键接入」，都开库设置）；`rootCount>0 && total===0` → 建议重扫；有筛选无结果 → 筛选空态。
 - **冷升级自愈**：增量复用分支无条件刷新 `RootSource`（LibraryScanner.cs:76）+ 前端 boot 每次启动 rescan（main.js），但 `--server` 冷启动与手改索引不会被覆盖。`Vault` 构造时校验 `RootContaining(FullPath)?.Source != item.RootSource` 即触发一次 Rescan（O(n×roots)），兜住来源漂移。
+
+### 3.9 侧栏手风琴与滚动隔离布局（v0.4.3）
+
+v0.4.3 解决两个体验问题：侧栏三级导航（分类/子目录/我的标签）同时平铺太长，以及"整窗一起滚"的布局 bug。
+
+- **手风琴**：侧栏三个分区改为可折叠手风琴（`#acc-kind/#acc-dir/#acc-tag`），**同一时间最多一个展开**（再点已展开的 = 全部收起）。平滑高度过渡用纯 CSS 实现：`.acc-body { display:grid; grid-template-rows:0fr }`，展开时切 `1fr`（grid 行高过渡比 max-height 干净，无需 JS 测量）；`.acc-inner { overflow:hidden }`。空分区（无子目录/无标签）加 `.disabled` 置灰且不响应点击，而不是隐藏——三分区始终可见。
+- **滚动隔离**：`html,body { height:100%; overflow:hidden }` 根除整窗滚动；`#app` 100vh flex 列布局，滚动只发生在 `#sidebar`（overflow-y:auto + min-height:0）与 `#content`（flex:1 + min-height:0 + overflow-y:auto）内部。**flex 子项默认 min-height:auto 会被内容撑破，必须显式 min-height:0** 才能让 overflow 生效——这是整窗滚动 bug 的根因。窗口 resize 时 flex 自动重算，无需 JS。
+- **可移植性探测（隐私去硬编码）**：`TavernDetector` 不再硬编码机器路径，改为 `TV_SILLYTAVERN_DATA` / `TV_TAURITAVERN_DATA` 环境变量优先 → `%USERPROFILE%` 约定路径回退（`SillyTavern\data\default-user`、`TauriTavern\cache\default-user`），目录必须含 `characters/` 才认定有效；`EnsureDefaultRoot` 同理只探测 `%USERPROFILE%\酒馆PR`，不存在则保持空库由前端空态引导。仓库与文档内不再出现任何机器特定绝对路径。完整便携方案（首启向导、配置化探测）记入 §11 长远方向。
 
 ---
 
@@ -305,13 +313,14 @@ dotnet build TavernVault.slnx -c Release
 | v0.3.1 | 打磨 | 库设置修复；Esc 兜底关弹窗；左下角版本号；预设可视化二期（采样参数/生效顺序/提示词详情可编辑）；csproj 确定性拷贝 |
 | v0.4.0 | 酒馆接入 | 库根模型对象化 `{Path,Source}`+旧设置自动迁移（索引 2→3）；`TavernDetector`；`/api/tavern/detect+connect`；酒馆源重命名/移动 403 护栏（`force` 覆盖）；酒馆源强制备份、TT 保留 10 份；前端接入向导+来源徽章 |
 | v0.4.1 | **多库管理 + 备份位置** | 侧栏"库"分组选项卡（按库根浏览）；备份位置自定义（`BackupRootPath` + `RelocateTo` 整体迁移 + 绝对路径校验）；项目文档体系升级；单元测试 34→36 |
-| **v0.4.2（当前工作区）** | **三逻辑库选项卡** | 侧栏重构为三个独立逻辑库（局外存储/SillyTavern/TauriTavern，来源并集）；每库独立类型计数 + 二级子目录导航（酒馆库按功能分区根）；`Vault.BuildLibraries` 聚合 + `QueryParams.Source` 过滤（非法 source 400）；移动弹窗按来源分组；构造时来源漂移自愈；单测 36→41、冒烟 49→61（**夹具自足**） |
+| v0.4.2 | **三逻辑库选项卡** | 侧栏重构为三个独立逻辑库（局外存储/SillyTavern/TauriTavern，来源并集）；每库独立类型计数 + 二级子目录导航（酒馆库按功能分区根）；`Vault.BuildLibraries` 聚合 + `QueryParams.Source` 过滤（非法 source 400）；移动弹窗按来源分组；构造时来源漂移自愈；单测 36→41、冒烟 49→61（**夹具自足**） |
+| **v0.4.3（当前工作区）** | **手风琴 + 滚动隔离 + 可移植性** | 侧栏分类/子目录/标签三分区手风琴（单开互斥、0fr→1fr 平滑过渡、空分区置灰）；整窗滚动 bug 修复（html/body overflow:hidden，滚动收敛到侧栏与内容区内部，flex min-height:0 链）；`TavernDetector`/`EnsureDefaultRoot` 去硬编码（环境变量 + %USERPROFILE% 约定探测）；全仓库文档脱敏（零机器特定路径）；冒烟脚本路径改用 `TESTDATA` 变量 |
 
-### 9.2 当前状态（截至 2026-08-31）
+### 9.2 当前状态（截至 2026-09-01）
 
-- 分支 `qoder/TavernVault`，最新提交为 v0.4.1。
-- **工作区有 10 个未提交文件**（即 v0.4.2 全部改动）：`ApiServer.cs`、`TavernVault.App.csproj`（0.4.2）、`index.html`、`app.css`、`app.js`、`main.js`、`Vault.cs`、`smoke_api.py`（修改）+ `LibraryInfo.cs`、`VaultQueryTests.cs`（新增）。**待提交。**
-- v0.4.2 验证情况：Release 构建 0 警告 0 错误；41/41 单测通过；61/61 冒烟通过（含三逻辑库 12 项）；浏览器 UI 清单 7 项通过（三 tab 常显、切库重置/保留契约、tv-library 非法回写、两类空态引导、二级子目录与组合过滤、移动弹窗分组、0 JS 错误）。
+- 分支 `qoder/TavernVault`，最新提交为 74cd26e（v0.4.2，已推送）。
+- **工作区有 13 个未提交文件**（即 v0.4.3 全部改动）：`ApiServer.cs`（EnsureDefaultRoot 去硬编码）、`TavernDetector.cs`（可移植探测）、`TavernVault.App.csproj`（0.4.3）、`index.html`/`app.css`/`app.js`（手风琴 + 滚动隔离）、`VaultQueryTests.cs`（xUnit2013 警告修复）、`smoke_api.py`（TESTDATA 变量）、`README.md` + 4 个 `docs/*.md`（v0.4.3 内容 + 全量路径脱敏）。**待提交。**
+- v0.4.3 验证情况：Release 构建 0 警告 0 错误；41/41 单测通过（0 警告）；61/61 冒烟通过（移动断言已用 TESTDATA 相对注册根，脚本零绝对路径）；浏览器 UI 清单通过——手风琴单开互斥/再点全收/禁用态不响应/0fr→1fr 过渡（computed transition 确认）、html/body overflow hidden 且 scrollHeight==clientHeight、#content overflow-y:auto 占满剩余高度、酒馆库切库后 dir/tag 置灰 + 空态引导、0 JS 错误、左下角显示 v0.4.3。
 
 ### 9.3 Git 信息
 
@@ -335,7 +344,7 @@ dotnet build TavernVault.slnx -c Release
 
 ### 未完成（当前收尾项）
 
-- [ ] **提交 v0.4.2**（10 个文件已验证，待用户确认后 commit；推送走代理 7897）
+- [ ] **提交 v0.4.3**（13 个文件已验证，待用户确认后 commit；推送走代理 7897）
 
 ### 近期方向（下一两个迭代）
 
@@ -345,10 +354,11 @@ dotnet build TavernVault.slnx -c Release
 
 ### 中远期方向
 
-4. **重复资源检测**：内容指纹（如哈希）识别同一资源的多个副本，配合整理建议。
-5. **FileSystemWatcher**：监视库目录变化自动重扫；配套批量操作（多选移动/打标）。
-6. **内容指纹追踪用户数据**：外部改名后收藏/标签仍能找回（替代纯路径哈希 Id）。
-7. **形态扩展**：Core 层无 UI 依赖，可直接复用做 CLI 或托盘工具。
+4. **可移植性（长远方向，v0.4.3 起步）**：目标是在任何电脑上开箱即用。v0.4.3 已完成去硬编码 + 环境变量/约定路径探测 + 文档脱敏；后续计划：**首次启动向导**（无库时引导选择资源目录/自动探测酒馆）、探测规则进一步配置化（settings.json 持久化候选路径）、可选"便携模式"（数据目录随程序目录而非 %APPDATA%）。
+5. **重复资源检测**：内容指纹（如哈希）识别同一资源的多个副本，配合整理建议。
+6. **FileSystemWatcher**：监视库目录变化自动重扫；配套批量操作（多选移动/打标）。
+7. **内容指纹追踪用户数据**：外部改名后收藏/标签仍能找回（替代纯路径哈希 Id）。
+8. **形态扩展**：Core 层无 UI 依赖，可直接复用做 CLI 或托盘工具。
 
 ---
 

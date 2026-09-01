@@ -71,7 +71,7 @@ public class VaultQueryTests : IDisposable
         var vault = NewVault();
         Assert.Equal(2, vault.Query(new QueryParams { Source = LibrarySource.Normal }).Count);
         Assert.Equal(2, vault.Query(new QueryParams { Source = LibrarySource.TavernST }).Count);
-        Assert.Equal(1, vault.Query(new QueryParams { Source = LibrarySource.TavernTT }).Count);
+        Assert.Single(vault.Query(new QueryParams { Source = LibrarySource.TavernTT }));
         Assert.Equal(5, vault.Query(new QueryParams()).Count); // Source=null 回归全量
     }
 

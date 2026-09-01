@@ -29,6 +29,26 @@ export function switchLibrary(key) {
   refreshItems();
 }
 
+// 侧栏手风琴：同一时间仅一个分区展开（null = 全部收起）
+let openAcc = 'kind';
+function applyAccordion() {
+  ['kind', 'dir', 'tag'].forEach((k) => {
+    $('#acc-' + k).classList.toggle('open', openAcc === k);
+  });
+}
+
+function initAccordion() {
+  ['kind', 'dir', 'tag'].forEach((k) => {
+    $('#acc-' + k).querySelector('.acc-head').addEventListener('click', () => {
+      const acc = $('#acc-' + k);
+      if (acc.classList.contains('disabled')) return;
+      openAcc = openAcc === k ? null : k;
+      applyAccordion();
+    });
+  });
+  applyAccordion();
+}
+
 const KIND_META = {
   character: { label: '角色卡', icon: 'character', color: '#d64f6f' },
   lorebook: { label: '世界书', icon: 'lorebook', color: '#b47909' },
@@ -105,8 +125,7 @@ export function renderSidebar() {
 
   // 子目录二级导航：酒馆库按注册根（characters/worlds/...），普通库按相对目录
   const dirs = lib?.dirs || [];
-  const dirSection = $('#dir-section');
-  dirSection.hidden = dirs.length === 0;
+  $('#acc-dir').classList.toggle('disabled', dirs.length === 0);
   const dirBox = $('#nav-dirs');
   dirBox.innerHTML = '';
   const isTavern = state.filter.library !== 'normal';
@@ -129,7 +148,7 @@ export function renderSidebar() {
 
   // 用户标签（当前库内计数）
   const tags = lib?.tags || [];
-  $('#tag-section').hidden = tags.length === 0;
+  $('#acc-tag').classList.toggle('disabled', tags.length === 0);
   const tagBox = $('#nav-tags');
   tagBox.innerHTML = '';
   tags.forEach((t) => {
@@ -598,6 +617,9 @@ export async function refreshMeta() {
 }
 
 export function initShell() {
+  // 侧栏手风琴（单开互斥）
+  initAccordion();
+
   // 搜索
   const search = $('#search');
   let t;

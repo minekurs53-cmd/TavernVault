@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-08-31 · 对应 v0.4.2
+> 最后更新：2026-09-01 · 对应 v0.4.3
 
 ## 一分钟了解
 
@@ -139,6 +139,8 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 | 酒馆源文件改名被拒 (403) | 预期护栏；确认风险后请求体加 `force:true` |
 | 旧索引缺新字段 | 版本门控没触发？确认 `IndexVersion` 已 +1 |
 | 修改后收藏/标签丢失 | 检查重命名/移动路径是否调了 `GetUserData`→`SetUserData` 迁移 |
+| 整窗一起滚 | 已修复（v0.4.3）：`html/body overflow:hidden` + `#content flex:1 min-height:0 overflow-y:auto`。新布局元素若破坏滚动隔离，检查中间是否缺 `min-height:0`（flex 子项默认 min-height:auto 会撑破） |
+| 手风琴点了没反应 | 分区为空时带 `.disabled`（预期置灰不响应）；确认 `.acc-head` 点击事件绑定在 `initAccordion()`（initShell 内） |
 
 ## 扩展点
 
@@ -152,7 +154,7 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 
 ## 安全红线
 
-1. 真实库（`D:\agent\酒馆PR`、两个酒馆目录）**只读验证**，写测试只进 `testdata/` 临时目录
+1. 用户真实资源库（局外根、两个酒馆目录）**只读验证**，写测试只进 `testdata/` 临时目录
 2. 删除一律走回收站，不直接删文件
 3. 移动目标必须在已登记库根内（`GuardUnderRoots`）
 4. API 只绑定 127.0.0.1，不要改

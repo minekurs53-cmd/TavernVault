@@ -1,14 +1,15 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-01 · 对应 v0.4.3 fix-1
+> 最后更新：2026-09-01 · 对应 v0.5.0
 
 ## 一分钟了解
 
 - 本地单用户桌面应用：WPF/WebView2 外壳 + Kestrel（**只听 127.0.0.1**）+ 原生 JS 前端
-- 管理酒馆资源（角色卡/世界书/预设/美化/脚本），写操作 = 备份 → 写盘 → 重扫
+- 管理酒馆资源（角色卡/世界书/预设/美化/脚本），写操作 = 备份 → 写盘 → 增量更新索引
 - 所有 JSON 编辑走 `JsonNode` 无损路径，未知字段永不丢失
-- 酒馆来源文件有护栏：默认禁改名/移动（403），写前强制备份
+- **API 有会话令牌 + Host 白名单**：无令牌请求 401、伪造 Host 403（v0.5.0）
+- 酒馆来源文件有护栏：默认禁改名/移动（403），写前强制备份；**备份失败显性告警不静默**
 
 ## 常用命令
 
@@ -22,8 +23,10 @@ dotnet build TavernVault.slnx -c Release
 ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe --server --port=47999 --data=.smoke/data   # 无窗口
 
 # 测试
-dotnet test TavernVault.slnx -c Release    # 36 项单测
-python tests/smoke_api.py                  # 49 项 API 冒烟（需 --server --port=47999 先起服务）
+dotnet test TavernVault.slnx -c Release    # 单元测试（数量以输出为准）
+# 冒烟：先启动 --server（连接信息写入 <data>/server-connection.json），脚本自动读取
+./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe --server --port=47999 --data=testdata-server &
+PYTHONIOENCODING=utf-8 python tests/smoke_api.py
 
 # 前端语法检查（必须 .mjs，否则抓不到模块级错误）
 for f in api app editor main util; do cp src/TavernVault.App/wwwroot/js/$f.js /tmp/$f.mjs && node --check /tmp/$f.mjs && echo "$f OK"; done
@@ -42,6 +45,8 @@ for f in api app editor main util; do cp src/TavernVault.App/wwwroot/js/$f.js /t
 | `util.js` | 通用工具（格式化、转义等） |
 
 ## API 速查
+
+**鉴权（v0.5.0）**：所有 `/api/*` 请求必须带会话令牌——`X-TV-Token` 头（fetch 用）或 `?token=` query（img 标签用）；令牌由启动随机生成，窗口模式经 WebView2 注入，`--server` 模式落盘 `server-connection.json`。缺失/错误 401，伪造 Host 403。编辑保存可带 `expectedModified`（读取时的条目 modifiedAt），文件被外部改动时服务端返回 409 拒绝写入。
 
 ### 查询
 ```
@@ -136,6 +141,10 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 | `--data` 目录没生效 | Git Bash 吞了反斜杠；用相对路径 `--data=.smoke/data` |
 | 仓库/Release 目录体积莫名增长 | WebView2 浏览器缓存 `bin/.../TavernVault.exe.WebView2\`（窗口模式每次运行都会增长，曾积累到 69M）。可整体删除，重开自动重建；`--server` 模式不产生 |
 | git push 连不上 github | 代理 7897 未启动；仓库已配 `http.proxy` |
+| 页面能打开但请求全 401 | 外部浏览器没有令牌（预期）——UI 只能经 WebView2 外壳使用；脚本用 `server-connection.json` 里的 token |
+| 保存返回 409「文件已被外部修改」 | 文件在外部被改动或另一窗口已保存；重新打开该条目再保存（会重扫索引） |
+| 启动提示「已在运行」 | 单实例 Mutex 防护（v0.5.0）：同一数据目录只允许一个实例 |
+| 备份目录不可用/磁盘满 | 保存会继续但响应带 `warnings`，界面弹错误色提示，日志落 `logs/tavernvault-*.log`——检查备份位置 |
 | 酒馆源文件改名被拒 (403) | 预期护栏；确认风险后请求体加 `force:true` |
 | 旧索引缺新字段 | 版本门控没触发？确认 `IndexVersion` 已 +1 |
 | 修改后收藏/标签丢失 | 检查重命名/移动路径是否调了 `GetUserData`→`SetUserData` 迁移 |
@@ -170,4 +179,4 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 1. 用户真实资源库（局外根、两个酒馆目录）**只读验证**，写测试只进 `testdata/` 临时目录
 2. 删除一律走回收站，不直接删文件
 3. 移动目标必须在已登记库根内（`GuardUnderRoots`）
-4. API 只绑定 127.0.0.1，不要改
+4. API 只绑定 127.0.0.1，**不要去掉会话令牌 / Host 校验中间件**（v0.5.0 安全边界，见 README「安全模型」）

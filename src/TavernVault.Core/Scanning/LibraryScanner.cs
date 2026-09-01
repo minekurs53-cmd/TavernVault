@@ -61,7 +61,8 @@ public sealed class LibraryScanner
         return false;
     }
 
-    private static LibraryItem? BuildItem(string fullPath, string rootFull, LibrarySource source,
+    /// <summary>构建单文件条目（Vault.UpsertItem 增量更新复用）。existing 为空时每次都全量解析。</summary>
+    public static LibraryItem? BuildItem(string fullPath, string rootFull, LibrarySource source,
         Dictionary<string, LibraryItem> existingByPath, IReadOnlyDictionary<string, LibraryItem> existingById)
     {
         var info = new FileInfo(fullPath);

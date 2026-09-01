@@ -39,7 +39,9 @@ public sealed class SettingsStore
 
     public void SaveSettings(AppSettings settings)
     {
-        File.WriteAllText(SettingsPath, JsonSerializer.Serialize(settings, JsonOpts));
+        var tmp = SettingsPath + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(settings, JsonOpts));
+        File.Move(tmp, SettingsPath, overwrite: true);
     }
 
     // 索引结构版本：条目模型变化时 +1，旧索引直接丢弃全量重建，

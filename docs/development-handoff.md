@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.4.3（工作区，未提交）** · 最后更新：2026-09-01
+> 当前版本：**v0.4.3 fix-1（工作区）** · 最后更新：2026-09-01
 
 ---
 
@@ -314,13 +314,14 @@ dotnet build TavernVault.slnx -c Release
 | v0.4.0 | 酒馆接入 | 库根模型对象化 `{Path,Source}`+旧设置自动迁移（索引 2→3）；`TavernDetector`；`/api/tavern/detect+connect`；酒馆源重命名/移动 403 护栏（`force` 覆盖）；酒馆源强制备份、TT 保留 10 份；前端接入向导+来源徽章 |
 | v0.4.1 | **多库管理 + 备份位置** | 侧栏"库"分组选项卡（按库根浏览）；备份位置自定义（`BackupRootPath` + `RelocateTo` 整体迁移 + 绝对路径校验）；项目文档体系升级；单元测试 34→36 |
 | v0.4.2 | **三逻辑库选项卡** | 侧栏重构为三个独立逻辑库（局外存储/SillyTavern/TauriTavern，来源并集）；每库独立类型计数 + 二级子目录导航（酒馆库按功能分区根）；`Vault.BuildLibraries` 聚合 + `QueryParams.Source` 过滤（非法 source 400）；移动弹窗按来源分组；构造时来源漂移自愈；单测 36→41、冒烟 49→61（**夹具自足**） |
-| **v0.4.3（当前工作区）** | **手风琴 + 滚动隔离 + 可移植性** | 侧栏分类/子目录/标签三分区手风琴（单开互斥、0fr→1fr 平滑过渡、空分区置灰）；整窗滚动 bug 修复（html/body overflow:hidden，滚动收敛到侧栏与内容区内部，flex min-height:0 链）；`TavernDetector`/`EnsureDefaultRoot` 去硬编码（环境变量 + %USERPROFILE% 约定探测）；全仓库文档脱敏（零机器特定路径）；冒烟脚本路径改用 `TESTDATA` 变量 |
+| v0.4.3 | **手风琴 + 滚动隔离 + 可移植性** | 侧栏分类/子目录/标签三分区手风琴（单开互斥、0fr→1fr 平滑过渡、空分区置灰）；整窗滚动 bug 修复（html/body overflow:hidden，滚动收敛到侧栏与内容区内部，flex min-height:0 链）；`TavernDetector`/`EnsureDefaultRoot` 去硬编码（环境变量 + %USERPROFILE% 约定探测）；全仓库文档脱敏（零机器特定路径）；冒烟脚本路径改用 `TESTDATA` 变量；**fix-1** 修复弹窗超高无法滚动（`.modal` max-height + overflow-y）、版本号改四段式显示 `vX.Y.Z fix-N`、确立版本号规范（见 quick-reference） |
 
 ### 9.2 当前状态（截至 2026-09-01）
 
-- 分支 `qoder/TavernVault`，最新提交为 74cd26e（v0.4.2，已推送）。
-- **工作区有 13 个未提交文件**（即 v0.4.3 全部改动）：`ApiServer.cs`（EnsureDefaultRoot 去硬编码）、`TavernDetector.cs`（可移植探测）、`TavernVault.App.csproj`（0.4.3）、`index.html`/`app.css`/`app.js`（手风琴 + 滚动隔离）、`VaultQueryTests.cs`（xUnit2013 警告修复）、`smoke_api.py`（TESTDATA 变量）、`README.md` + 4 个 `docs/*.md`（v0.4.3 内容 + 全量路径脱敏）。**待提交。**
-- v0.4.3 验证情况：Release 构建 0 警告 0 错误；41/41 单测通过（0 警告）；61/61 冒烟通过（移动断言已用 TESTDATA 相对注册根，脚本零绝对路径）；浏览器 UI 清单通过——手风琴单开互斥/再点全收/禁用态不响应/0fr→1fr 过渡（computed transition 确认）、html/body overflow hidden 且 scrollHeight==clientHeight、#content overflow-y:auto 占满剩余高度、酒馆库切库后 dir/tag 置灰 + 空态引导、0 JS 错误、左下角显示 v0.4.3。
+- 分支 `qoder/TavernVault`，最新提交为 v0.4.3（13 个文件）。
+- **工作区为 v0.4.3 fix-1 改动**（待提交）：`app.css`（`.modal` max-height+overflow 修复弹窗滚动）、`main.js`（版本显示 `vX.Y.Z fix-N`）、`ApiServer.cs`（meta version `ToString(4)`）、`TavernVault.App.csproj`（0.4.3.1）、`README.md` + 3 个 `docs/*.md`（版本规范 + 演进规则，未新增演进条目）。
+- v0.4.3 验证情况：Release 构建 0 警告 0 错误；41/41 单测通过（0 警告）；61/61 冒烟通过；浏览器 UI 清单通过——手风琴单开互斥/再点全收/禁用态不响应/0fr→1fr 过渡、html/body overflow hidden 且 scrollHeight==clientHeight、#content overflow-y:auto 占满剩余高度、酒馆库切库后 dir/tag 置灰 + 空态引导、0 JS 错误。
+- fix-1 验证情况见提交后记录；规范文档演进规则（热修不新增条目、时间线 ≤3 分项）自 fix-1 起生效。
 
 ### 9.3 Git 信息
 

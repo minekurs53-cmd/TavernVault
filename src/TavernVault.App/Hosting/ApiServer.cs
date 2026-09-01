@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -15,13 +16,16 @@ using TavernVault.Core.Storage;
 
 namespace TavernVault.App.Hosting;
 
+/// <summary>Build 的返回值：App 供启动，Token 供 WebView2 注入 / 连接文件，DataDir 供落盘位置。</summary>
+public sealed record ApiServerHandle(WebApplication App, string Token, string DataDir);
+
 /// <summary>Kestrel 本地服务：静态前端 + REST API。只绑定 127.0.0.1。</summary>
 public static class ApiServer
 {
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     { ".json", ".js", ".mjs", ".ts", ".py", ".qs", ".ps1", ".bat", ".yaml", ".yml", ".md", ".txt", ".css", ".html", ".log" };
 
-    public static WebApplication Build(string[] args)
+    public static ApiServerHandle Build(string[] args)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -34,11 +38,42 @@ public static class ApiServer
 
         string? dataDir = Array.Find(args, a => a.StartsWith("--data=")) is { } d ? d[7..] : null;
         var vault = new Vault(new SettingsStore(dataDir));
+        AppLog.Init(vault.DataDir);
+        AppLog.Info($"启动 v{typeof(ApiServer).Assembly.GetName().Version?.ToString(4)}（数据目录 {vault.DataDir}）");
         EnsureDefaultRoot(vault);
         var thumbs = new ThumbnailService();
         var headless = args.Contains("--server");
+        var token = Array.Find(args, a => a.StartsWith("--token=")) is { } t
+            ? ValidateToken(t[8..])
+            : Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
 
         var app = builder.Build();
+        // 安全边界（管道最外层）：Host 白名单防 DNS rebinding；/api/* 须携带会话令牌
+        // （X-TV-Token header 或 ?token= query——img src 无法带自定义 header，两通道保密性等价）。
+        // 浏览器 drive-by 的跨域 no-cors 请求无法得知随机令牌，防住本机网页对 API 的增删改。
+        app.Use(async (ctx, next) =>
+        {
+            var host = ctx.Request.Host.Host.Trim('[', ']');
+            if (host != "127.0.0.1" && !host.Equals("localhost", StringComparison.OrdinalIgnoreCase) && host != "::1")
+            {
+                ctx.Response.StatusCode = 403;
+                await ctx.Response.WriteAsJsonAsync(new { error = "拒绝的 Host 头" });
+                return;
+            }
+
+            if (ctx.Request.Path.StartsWithSegments("/api"))
+            {
+                var provided = ctx.Request.Headers["X-TV-Token"].FirstOrDefault()
+                    ?? ctx.Request.Query["token"].FirstOrDefault();
+                if (provided is null || !TokenMatches(provided, token))
+                {
+                    ctx.Response.StatusCode = 401;
+                    await ctx.Response.WriteAsJsonAsync(new { error = "未授权：缺少或无效的访问令牌" });
+                    return;
+                }
+            }
+            await next();
+        });
         app.UseDefaultFiles();
         app.UseStaticFiles(new StaticFileOptions
         {
@@ -48,7 +83,21 @@ public static class ApiServer
         });
 
         MapApi(app, vault, thumbs, headless);
-        return app;
+        return new ApiServerHandle(app, token, vault.DataDir);
+    }
+
+    private static string ValidateToken(string token)
+    {
+        if (token.Length < 16 || token.Any(char.IsWhiteSpace))
+            throw new ArgumentException("--token 需要 ≥16 个字符且不含空白");
+        return token;
+    }
+
+    private static bool TokenMatches(string provided, string expected)
+    {
+        var a = Encoding.UTF8.GetBytes(provided);
+        var b = Encoding.UTF8.GetBytes(expected);
+        return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
     }
 
     /// <summary>首次运行时把常见的酒馆资源目录作为默认库（存在才加）。不含机器特定路径。</summary>
@@ -99,7 +148,7 @@ public static class ApiServer
             });
         });
 
-        app.MapPost("/api/rescan", () => Handle(() =>
+        app.MapPost("/api/rescan", (HttpContext ctx) => Handle(ctx, () =>
         {
             int count = vault.Rescan();
             return Json(new { count });
@@ -163,14 +212,15 @@ public static class ApiServer
             catch (Exception ex) { return Err(ex.Message, 500); }
         });
 
-        // body: { fields: {...}, alternateGreetings: [...], tags: [...] } —— 服务端合并保存，避免整卡回传
-        app.MapPut("/api/cards/{id}", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        // body: { fields: {...}, alternateGreetings: [...], tags: [...], expectedModified? } —— 服务端合并保存，避免整卡回传
+        app.MapPut("/api/cards/{id}", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
 
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             if (body is null) return Err("请求体格式错误", 400);
+            if (CheckNotModified(item, body) is { } conflict) return conflict;
 
             var card = CharacterCardFile.Load(item.FullPath) as JsonObject;
             if (card is null) return Err("无法解析原角色卡", 400);
@@ -198,15 +248,16 @@ public static class ApiServer
             if (body["tags"] is JsonArray tags)
                 data["tags"] = (JsonArray)tags.DeepClone();
 
-            vault.BackupBeforeWrite(item.FullPath);
+            var warnings = new List<string>();
+            AddWarnings(warnings, vault.BackupBeforeWrite(item.FullPath));
             CharacterCardFile.Save(item.FullPath, card);
-            vault.Rescan();
-            return Json(new { ok = true, id = LibraryScanner.ComputeId(item.FullPath) });
+            vault.UpsertItem(item.FullPath);
+            return Json(new { ok = true, id = LibraryScanner.ComputeId(item.FullPath), warnings, modifiedAt = File.GetLastWriteTime(item.FullPath) });
         }));
 
         // ---------- 另存为（自动命名副本） ----------
         // 卡片：当前编辑内容写入新文件（PNG 先复制原图再重新内嵌，图像保留）
-        app.MapPost("/api/cards/{id}/saveas", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        app.MapPost("/api/cards/{id}/saveas", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
@@ -216,17 +267,15 @@ public static class ApiServer
 
             var newPath = FileOperations.GetSaveAsPath(item.FullPath);
             if (item.HasEmbeddedCard && item.FullPath.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
-                File.Copy(item.FullPath, newPath); // 复制原图，再写入编辑后的卡片数据
-            await File.WriteAllTextAsync(newPath,
-                cardNode.ToJsonString(JsonOptions.WriteIndented), new UTF8Encoding(false));
+                File.Copy(item.FullPath, newPath); // 复制原图，Save 内只重嵌 chara/ccv3 块，图像数据原样保留
             CharacterCardFile.Save(newPath, cardNode);
-            vault.Rescan();
+            vault.UpsertItem(newPath);
             var nid = LibraryScanner.ComputeId(newPath);
             return Json(new { ok = true, id = nid, fileName = Path.GetFileName(newPath) });
         }));
 
         // 世界书：编辑后的条目写入新文件（其它顶层键保留）
-        app.MapPost("/api/lore/{id}/saveas", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        app.MapPost("/api/lore/{id}/saveas", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Lorebook) return Err("不是世界书", 400);
@@ -245,12 +294,12 @@ public static class ApiServer
 
             var newPath = FileOperations.GetSaveAsPath(item.FullPath);
             await File.WriteAllTextAsync(newPath, root.ToJsonString(JsonOptions.WriteIndented), new UTF8Encoding(false));
-            vault.Rescan();
+            vault.UpsertItem(newPath);
             return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath), fileName = Path.GetFileName(newPath) });
         }));
 
         // 内嵌世界书：导出为独立世界书（ST dict 格式）
-        app.MapPost("/api/cards/{id}/book/saveas", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        app.MapPost("/api/cards/{id}/book/saveas", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
@@ -268,12 +317,12 @@ public static class ApiServer
             var newPath = FileOperations.GetSaveAsPath(Path.Combine(dir, displayName + ".json"));
             var doc = new JsonObject { ["entries"] = entries };
             await File.WriteAllTextAsync(newPath, doc.ToJsonString(JsonOptions.WriteIndented), new UTF8Encoding(false));
-            vault.Rescan();
+            vault.UpsertItem(newPath);
             return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath), fileName = Path.GetFileName(newPath) });
         }));
 
         // 文本/原始 JSON：内容写入新文件（.json 校验）
-        app.MapPost("/api/text/{id}/saveas", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        app.MapPost("/api/text/{id}/saveas", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
             if (item is null) return Results.NotFound();
@@ -286,7 +335,7 @@ public static class ApiServer
             }
             var newPath = FileOperations.GetSaveAsPath(item.FullPath);
             await File.WriteAllTextAsync(newPath, content, new UTF8Encoding(false));
-            vault.Rescan();
+            vault.UpsertItem(newPath);
             return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath), fileName = Path.GetFileName(newPath) });
         }));
 
@@ -317,14 +366,15 @@ public static class ApiServer
             catch (Exception ex) { return Err(ex.Message, 500); }
         });
 
-        // body: { entries: [{ key, data, raw? }] } —— raw 为 Spec 原条目时合并编辑，否则按 ST 格式写入
-        app.MapPut("/api/cards/{id}/book", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        // body: { entries: [{ key, data, raw? }], expectedModified? } —— raw 为 Spec 原条目时合并编辑，否则按 ST 格式写入
+        app.MapPut("/api/cards/{id}/book", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
 
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             if (body?["entries"] is not JsonArray list) return Err("请求体格式错误", 400);
+            if (CheckNotModified(item, body) is { } conflict) return conflict;
 
             var card = CharacterCardFile.Load(item.FullPath) as JsonObject;
             if (card is null) return Err("无法解析原角色卡", 400);
@@ -350,10 +400,11 @@ public static class ApiServer
             }
             CharacterBook.WriteEntries(book, entries);
 
-            vault.BackupBeforeWrite(item.FullPath);
+            var warnings = new List<string>();
+            AddWarnings(warnings, vault.BackupBeforeWrite(item.FullPath));
             CharacterCardFile.Save(item.FullPath, card);
-            vault.Rescan();
-            return Json(new { ok = true, id = LibraryScanner.ComputeId(item.FullPath), count = entries.Count });
+            vault.UpsertItem(item.FullPath);
+            return Json(new { ok = true, id = LibraryScanner.ComputeId(item.FullPath), count = entries.Count, warnings, modifiedAt = File.GetLastWriteTime(item.FullPath) });
         }));
 
         // ---------- 世界书编辑 ----------
@@ -374,14 +425,15 @@ public static class ApiServer
             catch (Exception ex) { return Err(ex.Message, 500); }
         });
 
-        // body: { entries: [{ key, data }] } —— 整体重建 entries，其它顶层键保留
-        app.MapPut("/api/lore/{id}", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        // body: { entries: [{ key, data }], expectedModified? } —— 整体重建 entries，其它顶层键保留
+        app.MapPut("/api/lore/{id}", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Lorebook) return Err("不是世界书", 400);
 
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             if (body?["entries"] is not JsonArray list) return Err("请求体格式错误", 400);
+            if (CheckNotModified(item, body) is { } conflict) return conflict;
 
             var root = JsonNode.Parse(File.ReadAllText(item.FullPath)) as JsonObject
                 ?? throw new InvalidOperationException("原文件不是 JSON 对象");
@@ -394,10 +446,11 @@ public static class ApiServer
             }
             root["entries"] = entries;
 
-            vault.BackupBeforeWrite(item.FullPath);
+            var warnings = new List<string>();
+            AddWarnings(warnings, vault.BackupBeforeWrite(item.FullPath));
             await File.WriteAllTextAsync(item.FullPath, root.ToJsonString(JsonOptions.WriteIndented), new UTF8Encoding(false));
-            vault.Rescan();
-            return Json(new { ok = true, count = entries.Count });
+            vault.UpsertItem(item.FullPath);
+            return Json(new { ok = true, count = entries.Count, warnings, modifiedAt = File.GetLastWriteTime(item.FullPath) });
         }));
 
         // ---------- 文本 / 原始 JSON 编辑 ----------
@@ -410,14 +463,16 @@ public static class ApiServer
             return Json(new { content = File.ReadAllText(item.FullPath) });
         });
 
-        app.MapPut("/api/text/{id}", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        app.MapPut("/api/text/{id}", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
             if (item is null) return Results.NotFound();
             if (!TextExtensions.Contains(Path.GetExtension(item.FullPath))) return Err("该文件类型不支持文本编辑", 400);
 
-            var content = (await JsonNode.ParseAsync(req.Body))?["content"]?.GetValue<string>();
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            var content = body?["content"]?.GetValue<string>();
             if (content is null) return Err("请求体格式错误", 400);
+            if (CheckNotModified(item, body) is { } conflict) return conflict;
 
             if (Path.GetExtension(item.FullPath).Equals(".json", StringComparison.OrdinalIgnoreCase))
             {
@@ -425,10 +480,11 @@ public static class ApiServer
                 catch (System.Text.Json.JsonException ex) { return Err($"JSON 校验失败：{ex.Message}", 400); }
             }
 
-            vault.BackupBeforeWrite(item.FullPath);
+            var warnings = new List<string>();
+            AddWarnings(warnings, vault.BackupBeforeWrite(item.FullPath));
             await File.WriteAllTextAsync(item.FullPath, content, new UTF8Encoding(false));
-            vault.Rescan();
-            return Json(new { ok = true });
+            vault.UpsertItem(item.FullPath);
+            return Json(new { ok = true, warnings, modifiedAt = File.GetLastWriteTime(item.FullPath) });
         }));
 
         // ---------- 备份与还原 ----------
@@ -439,14 +495,16 @@ public static class ApiServer
             return Json(vault.Backups.List(item.FullPath));
         });
 
-        app.MapPost("/api/backups/{bid}/restore", (string bid) => Handle(() =>
+        app.MapPost("/api/backups/{bid}/restore", (HttpContext ctx, string bid) => Handle(ctx, () =>
         {
-            var path = vault.Backups.Restore(bid) ?? throw new InvalidOperationException("备份不存在或已损坏");
-            vault.Rescan();
-            return Json(new { ok = true, id = LibraryScanner.ComputeId(path) });
+            var path = vault.Backups.Restore(bid, out var restoreWarning) ?? throw new InvalidOperationException("备份不存在或已损坏");
+            var warnings = new List<string>();
+            AddWarnings(warnings, restoreWarning);
+            vault.UpsertItem(path);
+            return Json(new { ok = true, id = LibraryScanner.ComputeId(path), warnings });
         }));
 
-        app.MapDelete("/api/backups/{bid}", (string bid) => Handle(() =>
+        app.MapDelete("/api/backups/{bid}", (HttpContext ctx, string bid) => Handle(ctx, () =>
             vault.Backups.Delete(bid) ? Json(new { ok = true }) : Err("备份不存在", 404)));
 
         app.MapGet("/api/backups/stats", () =>
@@ -463,7 +521,7 @@ public static class ApiServer
             });
         });
 
-        app.MapPost("/api/settings/backup", async (HttpRequest req) => await HandleAsync(async () =>
+        app.MapPost("/api/settings/backup", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             if (body?["autoBackup"] is JsonValue ab) vault.Settings.AutoBackup = ab.GetValue<bool>();
@@ -495,20 +553,20 @@ public static class ApiServer
         }));
 
         // ---------- 文件操作 ----------
-        app.MapPost("/api/items/{id}/favorite", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        app.MapPost("/api/items/{id}/favorite", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var fav = (await JsonNode.ParseAsync(req.Body))?["fav"]?.GetValue<bool>() ?? false;
             return vault.SetFavorite(id, fav) ? Json(new { ok = true }) : Err("条目不存在", 404);
         }));
 
-        app.MapPost("/api/items/{id}/tags", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        app.MapPost("/api/items/{id}/tags", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var arr = (await JsonNode.ParseAsync(req.Body))?["tags"] as JsonArray ?? new JsonArray();
             var tags = arr.OfType<JsonValue>().Select(v => v.GetValue<string>() ?? "").ToList();
             return vault.SetUserTags(id, tags) ? Json(new { ok = true }) : Err("条目不存在", 404);
         }));
 
-        app.MapPost("/api/items/{id}/rename", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        app.MapPost("/api/items/{id}/rename", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
             if (item is null) return Results.NotFound();
@@ -518,15 +576,18 @@ public static class ApiServer
             if (item.RootSource != LibrarySource.Normal && !force)
                 return Err("酒馆来源的角色卡不允许重命名（聊天通过文件名引用）", 403);
             var userData = vault.GetUserData(id); // Id 随路径变化，先取快照
-            vault.BackupBeforeWrite(item.FullPath);
+            var warnings = new List<string>();
+            AddWarnings(warnings, vault.BackupBeforeWrite(item.FullPath));
+            var oldPath = item.FullPath;
             var newPath = FileOperations.Rename(item, name ?? "");
-            vault.Rescan();
+            vault.RemoveItem(oldPath);
+            vault.UpsertItem(newPath);
             var newId = LibraryScanner.ComputeId(newPath);
             vault.SetUserData(newId, userData.Favorite, userData.Tags);
-            return Json(new { ok = true, id = newId });
+            return Json(new { ok = true, id = newId, warnings });
         }));
 
-        app.MapPost("/api/items/{id}/move", async (string id, HttpRequest req) => await HandleAsync(async () =>
+        app.MapPost("/api/items/{id}/move", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
             if (item is null) return Results.NotFound();
@@ -538,23 +599,25 @@ public static class ApiServer
                 return Err("酒馆来源的文件不允许移出原根（聊天通过路径引用）", 403);
             FileOperations.GuardUnderRoots(root, vault.Settings.LibraryRoots.Select(r => r.Path));
             var userData = vault.GetUserData(id); // Id 随路径变化，先取快照
+            var oldPath = item.FullPath;
             var newPath = FileOperations.Move(item, root, dir);
-            vault.Rescan();
+            vault.RemoveItem(oldPath);
+            vault.UpsertItem(newPath);
             var newId = LibraryScanner.ComputeId(newPath);
             vault.SetUserData(newId, userData.Favorite, userData.Tags);
             return Json(new { ok = true, id = newId });
         }));
 
-        app.MapPost("/api/items/{id}/delete", (string id) => Handle(() =>
+        app.MapPost("/api/items/{id}/delete", (HttpContext ctx, string id) => Handle(ctx, () =>
         {
             var item = vault.Find(id);
             if (item is null) return Results.NotFound();
             FileOperations.Recycle(item.FullPath);
-            vault.Rescan();
+            vault.RemoveItem(item.FullPath);
             return Json(new { ok = true });
         }));
 
-        app.MapPost("/api/reveal", async (HttpRequest req) => await HandleAsync(async () =>
+        app.MapPost("/api/reveal", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var body = await JsonNode.ParseAsync(req.Body);
             var item = vault.Find(body?["id"]?.GetValue<string>() ?? "");
@@ -564,7 +627,7 @@ public static class ApiServer
         }));
 
         // ---------- 设置 ----------
-        app.MapPost("/api/roots", async (HttpRequest req) => await HandleAsync(async () =>
+        app.MapPost("/api/roots", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             var path = body?["path"]?.GetValue<string>();
@@ -575,7 +638,7 @@ public static class ApiServer
             return Json(new { ok = true, roots = SerializeRoots(vault) });
         }));
 
-        app.MapDelete("/api/roots", async (HttpRequest req) => await HandleAsync(async () =>
+        app.MapDelete("/api/roots", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var path = (await JsonNode.ParseAsync(req.Body))?["path"]?.GetValue<string>();
             vault.RemoveRoot(path ?? "");
@@ -584,7 +647,7 @@ public static class ApiServer
         }));
 
         // ---------- 酒馆检测 ----------
-        app.MapPost("/api/tavern/detect", () => Handle(() =>
+        app.MapPost("/api/tavern/detect", (HttpContext ctx) => Handle(ctx, () =>
         {
             var found = TavernDetector.DetectAll()
                 .Select(d => new
@@ -596,7 +659,7 @@ public static class ApiServer
             return Json(new { found });
         }));
 
-        app.MapPost("/api/tavern/connect", async (HttpRequest req) => await HandleAsync(async () =>
+        app.MapPost("/api/tavern/connect", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             var sourceKey = body?["source"]?.GetValue<string>() ?? "";
@@ -624,7 +687,7 @@ public static class ApiServer
             return Json(new { ok = true, added, roots = SerializeRoots(vault) });
         }));
 
-        app.MapPost("/api/pick-folder", () => Handle(() =>
+        app.MapPost("/api/pick-folder", (HttpContext ctx) => Handle(ctx, () =>
         {
             if (headless) return Err("无窗口模式下不支持文件夹选择框", 400);
             var picked = FolderPicker.Pick();
@@ -650,18 +713,19 @@ public static class ApiServer
     // ---- 统一包装：强制返回 IResult，统一错误处理 ----
     private static IResult Json<T>(T value) => Results.Json(value);
 
-    private static IResult Handle(Func<IResult> action)
+    private static IResult Handle(HttpContext ctx, Func<IResult> action)
     {
         try { return action(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                                        or DirectoryNotFoundException or ArgumentException
                                        or InvalidOperationException or Win32Exception)
         {
+            AppLog.Error($"{ctx.Request.Method} {ctx.Request.Path} 失败", ex);
             return Err(ex.Message, 400);
         }
     }
 
-    private static async Task<IResult> HandleAsync(Func<Task<IResult>> action)
+    private static async Task<IResult> HandleAsync(HttpContext ctx, Func<Task<IResult>> action)
     {
         try { return await action(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
@@ -669,8 +733,33 @@ public static class ApiServer
                                        or InvalidOperationException or Win32Exception
                                        or System.Text.Json.JsonException)
         {
+            AppLog.Error($"{ctx.Request.Method} {ctx.Request.Path} 失败", ex);
             return Err(ex.Message, 400);
         }
+    }
+
+    /// <summary>收集写路径警告（null 忽略），同时落 WARN 日志。</summary>
+    private static void AddWarnings(List<string> warnings, string? w)
+    {
+        if (w is null) return;
+        warnings.Add(w);
+        AppLog.Warn(w);
+    }
+
+    /// <summary>
+    /// 编辑并发防护：请求体带 expectedModified（读取条目时的 modifiedAt 原样回传）时，
+    /// 校验文件当前修改时间是否仍一致；不匹配返回 409，防止两个编辑窗口互相覆盖（后写胜出丢失编辑）。
+    /// 未携带该字段则跳过校验（旧脚本兼容）。
+    /// </summary>
+    private static IResult? CheckNotModified(LibraryItem item, JsonObject? body)
+    {
+        var expected = body?["expectedModified"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(expected)) return null;
+        if (!DateTime.TryParse(expected, out var want)) return null;
+        var current = File.GetLastWriteTime(item.FullPath);
+        if (Math.Abs((current - want).TotalSeconds) > 1.0)
+            return Err("文件已被外部程序或其它窗口修改，本次未写入；请重新打开该条目后再保存", 409);
+        return null;
     }
 
     private static IResult Err(string message, int code) =>

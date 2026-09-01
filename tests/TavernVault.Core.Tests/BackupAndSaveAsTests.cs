@@ -1,4 +1,5 @@
 using TavernVault.Core.FileOps;
+using TavernVault.Core.Scanning;
 using TavernVault.Core.Storage;
 
 namespace TavernVault.Core.Tests;
@@ -111,6 +112,61 @@ public class BackupAndSaveAsTests : IDisposable
         Assert.False(store.Delete(b.Id));          // 已删
         Assert.Null(store.BackupBeforeWrite(Path.Combine(_dir, "不存在.json"))); // 原文件缺失 → null
         Assert.Null(store.Restore("deadbeef"));    // 未知 id
+    }
+
+    [Fact]
+    public void Vault_BackupBeforeWrite_Warns_When_Backup_Fails()
+    {
+        var dataDir = Path.Combine(_dir, "data");
+        var vault = new Vault(new SettingsStore(dataDir));
+        var file = WriteFile("警.json", "v1");
+
+        // 正常路径：备份成功，无警告
+        Assert.Null(vault.BackupBeforeWrite(file));
+        Assert.Single(vault.Backups.List(file));
+
+        // 备份目录被同名文件占死 → 写入必失败，外显警告而非静默
+        var backupsDir = vault.Backups.Dir;
+        Directory.Delete(backupsDir, recursive: true);
+        File.WriteAllText(backupsDir, "occupied");
+
+        var warning = vault.BackupBeforeWrite(file);
+        Assert.NotNull(warning);
+        Assert.Contains("自动备份失败", warning!);
+    }
+
+    [Fact]
+    public void Vault_UpsertItem_PreservesUserData_And_Removes()
+    {
+        // 增量更新不得丢用户数据（收藏/标签），且要同步 _byId 索引
+        var dataDir = Path.Combine(_dir, "data2");
+        var rootDir = Path.Combine(_dir, "root");
+        Directory.CreateDirectory(rootDir);
+        var file = Path.Combine(rootDir, "条目.json");
+        File.WriteAllText(file, """{"name":"条目","content":"x"}""");
+
+        var vault = new Vault(new SettingsStore(dataDir));
+        vault.AddRoot(rootDir);
+        vault.Rescan();
+        var id = LibraryScanner.ComputeId(file);
+        Assert.NotNull(vault.Find(id));
+
+        Assert.True(vault.SetFavorite(id, true));
+        Assert.True(vault.SetUserTags(id, ["我的标签"]));
+
+        // 模拟编辑后落盘：内容变化（mtime/size 变化），增量更新
+        File.WriteAllText(file, """{"name":"条目","content":"编辑后更长内容"}""");
+        var updated = vault.UpsertItem(file);
+        Assert.NotNull(updated);
+        Assert.True(updated!.Favorite);
+        Assert.Contains("我的标签", updated.UserTags);
+        Assert.NotNull(vault.Find(id)); // Find 字典同步
+        Assert.Single(vault.Items);
+
+        // 删除路径移除条目
+        Assert.True(vault.RemoveItem(file));
+        Assert.Null(vault.Find(id));
+        Assert.Empty(vault.Items);
     }
 
     // ---------- 另存为自动命名 ----------

@@ -1,18 +1,46 @@
 # -*- coding: utf-8 -*-
-"""针对本地服务的 API 冒烟测试（写入操作只作用于 testdata 临时库根）。"""
+"""针对本地服务的 API 冒烟测试（写入操作只作用于 testdata 临时库根）。
+
+连接信息默认从服务端写出的 server-connection.json 读取（--server 模式产物）；
+TV_CONN / TV_BASE / TV_TOKEN 环境变量可覆写。
+"""
+import base64
 import json
+import os
+import shutil
+import struct
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 
-BASE = "http://127.0.0.1:47999"
+
+def load_conn():
+    base = os.environ.get("TV_BASE")
+    token = os.environ.get("TV_TOKEN")
+    if base and token:
+        return base, token
+    conn = os.environ.get("TV_CONN", "testdata-server/server-connection.json")
+    if not os.path.exists(conn):
+        print(f"未找到连接文件 {conn}。请先启动服务：")
+        print("  ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe "
+              "--server --port=47999 --data=testdata-server &")
+        sys.exit(2)
+    with open(conn, encoding="utf-8") as f:
+        cfg = json.load(f)
+    return cfg["url"], cfg["token"]
+
+
+BASE, TOKEN = load_conn()
 ok_count = 0
 fail_count = 0
 
 
 def call(method, path, body=None):
     req = urllib.request.Request(BASE + path, method=method)
+    req.add_header("X-TV-Token", TOKEN)
     data = None
     if body is not None:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -27,6 +55,18 @@ def call(method, path, body=None):
             return json.loads(raw)
         except Exception:
             return {"error": f"HTTP {ex.code}"}
+
+
+def call_raw(method, path, headers=None):
+    """无令牌原始请求：安全负向用例（返回 HTTP 状态码）。"""
+    req = urllib.request.Request(BASE + path, method=method)
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, resp.headers.get("Content-Type") or ""
+    except urllib.error.HTTPError as ex:
+        return ex.code, ex.headers.get("Content-Type") or ""
 
 
 def check(name, cond, extra=""):
@@ -44,6 +84,21 @@ import os
 
 TESTDATA = os.path.abspath("testdata")
 os.makedirs(TESTDATA, exist_ok=True)
+# 清理上次运行残留（移动段目标冲突、另存为副本），保证夹具自足可重复
+for sub in ("归档", "归档2"):
+    d = os.path.join(TESTDATA, sub)
+    if os.path.isdir(d):
+        for fn in os.listdir(d):
+            if fn.endswith(".json"):
+                os.remove(os.path.join(d, fn))
+for fn in os.listdir(TESTDATA):
+    if "-副本" in fn:
+        os.remove(os.path.join(TESTDATA, fn))
+# 数据目录备份同理：上轮运行的备份会混入本轮 manifest（按文件名归档），清掉保证可重复
+bk_dir = os.path.join(os.path.dirname(os.path.abspath("testdata-server/server-connection.json")) or ".",
+                      "testdata-server", "backups")
+if os.path.isdir(bk_dir):
+    shutil.rmtree(bk_dir, ignore_errors=True)
 with open(os.path.join(TESTDATA, "测试卡.json"), "w", encoding="utf-8") as f:
     json.dump({
         "spec": "chara_card_v2",
@@ -197,6 +252,65 @@ check("position 保持字符串", card_now.get("position") == "before_char")
 check("索引条目数更新", call("GET", f"/api/items/{card_items[0]['id']}").get("entryCount") == 1)
 
 
+print("== PNG 卡完整性（v0.5.0 数据损坏回归）==")
+PNG_SIG = b"\x89PNG\r\n\x1a\n"
+
+
+def png_chunk(ctype, data):
+    return struct.pack(">I", len(data)) + ctype + data + struct.pack(">I", zlib.crc32(ctype + data) & 0xFFFFFFFF)
+
+
+def make_png_card(path, card_json):
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)  # 1x1、8bit、真彩
+    idat = zlib.compress(b"\x00\xff\x00\x7f")             # 滤波字节 + 1 像素（WPF 可解码）
+    chara = base64.b64encode(json.dumps(card_json, ensure_ascii=False).encode("utf-8"))
+    with open(path, "wb") as f:
+        f.write(PNG_SIG + png_chunk(b"IHDR", ihdr) + png_chunk(b"tEXt", b"chara\x00" + chara)
+                + png_chunk(b"IDAT", idat) + png_chunk(b"IEND", b""))
+
+
+def read_png_chunks(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    chunks = {}
+    pos = 8
+    while pos + 12 <= len(data):
+        (length,) = struct.unpack(">I", data[pos:pos + 4])
+        chunks[data[pos + 4:pos + 8].decode("latin-1")] = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+    return chunks
+
+
+png_path = os.path.join(TESTDATA, "图像卡.png")
+make_png_card(png_path, {"spec": "chara_card_v2", "spec_version": "2.0",
+                         "data": {"name": "图像卡", "description": "图像卡描述"}})
+call("POST", "/api/rescan")
+png_items = call("GET", "/api/items?q=" + urllib.parse.quote("图像卡"))
+check("PNG 卡被识别", len(png_items) == 1 and png_items[0]["kind"] == "character"
+      and png_items[0].get("hasEmbeddedCard") is True)
+png_id = png_items[0]["id"]
+orig_idat = read_png_chunks(png_path).get("IDAT")
+
+png_card = call("GET", f"/api/cards/{png_id}")["card"]
+png_card["data"]["description"] = "编辑后的图像卡描述"
+r = call("POST", f"/api/cards/{png_id}/saveas", {"card": png_card})
+check("PNG 另存为成功", r.get("ok") is True, r.get("fileName", ""))
+copy_path = os.path.join(TESTDATA, r["fileName"])
+copy_chunks = read_png_chunks(copy_path)
+check("副本含 IHDR/IDAT/IEND", all(t in copy_chunks for t in ("IHDR", "IDAT", "IEND")),
+      str(sorted(copy_chunks)))
+check("副本 IDAT 与原图一致（图像保留）", copy_chunks.get("IDAT") == orig_idat)
+copy_card = call("GET", f"/api/cards/{r['id']}")["card"]
+check("副本卡片为编辑后内容", copy_card["data"]["description"] == "编辑后的图像卡描述")
+
+call("PUT", f"/api/cards/{r['id']}", {"fields": {"description": "再编辑一次"}})
+check("PUT 编辑后 IDAT 字节不变", read_png_chunks(copy_path).get("IDAT") == orig_idat)
+
+code, ctype = call_raw("GET", f"/api/thumb/{png_id}?token={urllib.parse.quote(TOKEN)}")
+check("缩略图生成（query 令牌通道）", code == 200 and ctype.startswith("image/jpeg"), f"HTTP {code}")
+call("POST", f"/api/items/{r['id']}/delete", {})
+
+
 print("== 重命名 / 移动 ==")
 r = call("POST", f"/api/items/{card_item['id']}/rename", {"name": "改名卡"})
 check("重命名返回新id", bool(r.get("id")))
@@ -253,12 +367,41 @@ check("source+kind 组合是子集", 0 < len(combo) <= len(all_char)
       if all_char else len(combo) == 0)
 bad = call("GET", "/api/items?source=bogus")
 check("非法 source 返回 400", isinstance(bad, dict) and bad.get("error") == "无效的库来源")
-# dirs 闭环：普通库第一个目录的 count 与查询一致
+# dirs 闭环：普通库第一个非空目录的 count 与查询一致（dir="" 根目录无法与"不过滤"区分，跳过）
 normal_lib = next(l for l in libs if l["key"] == "normal")
-if normal_lib["dirs"]:
-    d0 = normal_lib["dirs"][0]
+d0 = next((d for d in normal_lib["dirs"] if d["dir"]), None)
+if d0:
     q = call("GET", "/api/items?source=normal&dir=" + urllib.parse.quote(d0["dir"]))
-    check("dirs 闭环（dir 查询==计数）", len(q) == d0["count"])
+    check("dirs 闭环（dir 查询==计数）", len(q) == d0["count"], f"dir={d0['dir']} count={d0['count']} got={len(q)}")
+
+print("== 编辑并发防护（v0.5.0 409）==")
+guard_id = call("GET", "/api/items?kind=lorebook")[0]["id"]  # 测试书在前段被重命名/移动过，取当前 id
+conc_item = call("GET", f"/api/items/{guard_id}")
+stale = conc_item["modifiedAt"]
+cur_text = call("GET", f"/api/text/{guard_id}")["content"]
+time.sleep(1.5)  # 让 stale 与外部改动间隔超过 1s mtime 容差（比较的是文件 mtime 而非钟表时间）
+with open(conc_item["fullPath"], "a", encoding="utf-8") as f:
+    f.write(" ")  # 外部改动文件（模拟另一窗口/程序）
+conflict = call("PUT", f"/api/text/{guard_id}",
+                {"content": cur_text, "expectedModified": stale})
+check("过期 modified 被拒 409", conflict is not None and "已被外部" in (conflict.get("error") or ""),
+      str(conflict)[:80])
+call("POST", "/api/rescan")  # 模拟用户"重新打开条目"：重扫后索引跟进外部改动
+fresh = call("GET", f"/api/items/{guard_id}")["modifiedAt"]
+ok2 = call("PUT", f"/api/text/{guard_id}",
+           {"content": cur_text, "expectedModified": fresh})
+check("新鲜 modified 保存成功并回传 modifiedAt", ok2.get("ok") is True and ok2.get("modifiedAt"),
+      str(ok2)[:80])
+
+print("== 安全防护（v0.5.0 会话令牌 + Host 白名单）==")
+code, _ = call_raw("GET", "/api/meta")
+check("无令牌被拒 401", code == 401, f"HTTP {code}")
+code, _ = call_raw("GET", "/api/meta", {"X-TV-Token": "wrong-token-0123456789"})
+check("错令牌被拒 401", code == 401, f"HTTP {code}")
+code, _ = call_raw("GET", "/api/meta", {"Host": "evil.example.com", "X-TV-Token": TOKEN})
+check("伪造 Host 被拒 403", code == 403, f"HTTP {code}")
+code, ctype = call_raw("GET", "/")
+check("静态文件无令牌可达", code == 200 and "text/html" in ctype, f"HTTP {code}")
 
 print(f"\n结果：{ok_count} 通过，{fail_count} 失败")
 sys.exit(1 if fail_count else 0)

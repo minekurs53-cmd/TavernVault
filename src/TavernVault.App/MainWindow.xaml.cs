@@ -6,11 +6,13 @@ namespace TavernVault.App;
 public partial class MainWindow : Window
 {
     private readonly string _url;
+    private readonly string _token;
 
-    public MainWindow(string url)
+    public MainWindow(string url, string token)
     {
         InitializeComponent();
         _url = url;
+        _token = token;
         Loaded += async (_, _) =>
         {
             try
@@ -27,6 +29,10 @@ public partial class MainWindow : Window
                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(e2.Uri) { UseShellExecute = true });
                     e2.Handled = true;
                 };
+                // 先注入令牌再导航：首个文档任何脚本执行前 window.__TV_TOKEN__ 已就位（对后续导航同样生效）
+                var literal = System.Text.Json.JsonSerializer.Serialize(_token);
+                await Web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(
+                    $"window.__TV_TOKEN__ = {literal};");
                 Web.CoreWebView2.Navigate(_url);
             }
             catch (WebView2RuntimeNotFoundException)

@@ -25,6 +25,7 @@ public sealed class Vault
     private readonly object _lock = new();
     private readonly SettingsStore _store;
     private readonly LibraryScanner _scanner = new();
+    private Dictionary<string, LibraryItem> _byId = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>文件级备份（编辑/还原前自动备份）。</summary>
     public BackupStore Backups { get; }
@@ -38,6 +39,7 @@ public sealed class Vault
         _store = store ?? new SettingsStore();
         Settings = _store.LoadSettings();
         Items = _store.LoadIndex();
+        RebuildById();
         Backups = new BackupStore(_store.DataDir, Settings.BackupRootPath) { MaxPerFile = Settings.MaxBackupsPerFile };
         Backups.RetentionFor = path => RetentionFor(RootContaining(path));
         // 来源一致性自愈：--server 冷启动与手改索引不会自动重扫，
@@ -65,14 +67,20 @@ public sealed class Vault
     private int RetentionFor(LibraryRoot? root)
         => root?.Source == LibrarySource.TavernTT ? 10 : Math.Max(1, Settings.MaxBackupsPerFile);
 
-    /// <summary>若开启自动备份或文件属于酒馆来源，在覆盖写入前调用；失败不抛出。</summary>
-    public void BackupBeforeWrite(string fullPath)
+    /// <summary>
+    /// 若开启自动备份或文件属于酒馆来源，在覆盖写入前调用。
+    /// 返回 null 表示备份正常；返回警告文本表示本次保存无备份兜底（备份失败，调用方应显性告警）。
+    /// </summary>
+    public string? BackupBeforeWrite(string fullPath)
     {
         var root = RootContaining(fullPath);
         var isTavern = root is not null && root.Source != LibrarySource.Normal;
-        if (!Settings.AutoBackup && !isTavern) return;
+        if (!Settings.AutoBackup && !isTavern) return null;
+        if (!File.Exists(fullPath)) return null;
         Backups.MaxPerFile = RetentionFor(root);
-        Backups.BackupBeforeWrite(fullPath);
+        return Backups.BackupBeforeWrite(fullPath, out var error) is null
+            ? $"自动备份失败（{error}）：本次保存无备份兜底"
+            : null;
     }
 
     public List<LibraryItem> Items { get; private set; } = [];
@@ -86,6 +94,7 @@ public sealed class Vault
             var existing = Items.ToDictionary(i => i.Id, i => i);
             items = _scanner.Scan(Settings.LibraryRoots, existing);
             Items = items;
+            RebuildById();
             LastScanAt = DateTime.Now;
             _store.SaveIndex(Items);
         }
@@ -94,7 +103,64 @@ public sealed class Vault
 
     public LibraryItem? Find(string id)
     {
-        lock (_lock) return Items.FirstOrDefault(i => i.Id == id);
+        lock (_lock) return _byId.GetValueOrDefault(id);
+    }
+
+    /// <summary>
+    /// 增量更新单文件条目（编辑/另存为/还原后调用），避免全量 Rescan 的 O(库文件数) 目录枚举。
+    /// 原条目的收藏/标签会保留到重建后的条目上。
+    /// </summary>
+    public LibraryItem? UpsertItem(string fullPath)
+    {
+        lock (_lock)
+        {
+            var full = Path.GetFullPath(fullPath);
+            var newId = LibraryScanner.ComputeId(full);
+
+            // 捕获旧条目（同 Id 或同路径）的用户数据，重建后回填
+            var old = _byId.GetValueOrDefault(newId)
+                ?? Items.FirstOrDefault(i => string.Equals(i.FullPath, full, StringComparison.OrdinalIgnoreCase));
+            var (fav, tags) = old is null ? (false, new List<string>()) : (old.Favorite, new List<string>(old.UserTags));
+
+            // 移除旧同 Id 条目与旧同路径条目（重命名后旧 Id 残留的情况）
+            Items.RemoveAll(i => i.Id == newId || string.Equals(i.FullPath, full, StringComparison.OrdinalIgnoreCase));
+            _byId.Remove(newId);
+
+            var root = RootContaining(full);
+            if (root is null) { _store.SaveIndex(Items); return null; }
+
+            var item = LibraryScanner.BuildItem(full, root.Path, root.Source,
+                new Dictionary<string, LibraryItem>(StringComparer.OrdinalIgnoreCase), _byId);
+            if (item is null) { _store.SaveIndex(Items); return null; }
+
+            item.Favorite = fav;
+            item.UserTags = tags;
+            Items.Add(item);
+            _byId[item.Id] = item;
+            _store.SaveIndex(Items);
+            return item;
+        }
+    }
+
+    /// <summary>按文件路径移除条目（删除/重命名/移动前调用）。</summary>
+    public bool RemoveItem(string fullPath)
+    {
+        lock (_lock)
+        {
+            var full = Path.GetFullPath(fullPath);
+            var idx = Items.FindIndex(i => string.Equals(i.FullPath, full, StringComparison.OrdinalIgnoreCase));
+            if (idx < 0) return false;
+            _byId.Remove(Items[idx].Id);
+            Items.RemoveAt(idx);
+            _store.SaveIndex(Items);
+            return true;
+        }
+    }
+
+    private void RebuildById()
+    {
+        _byId = new Dictionary<string, LibraryItem>(Items.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var i in Items) _byId[i.Id] = i;
     }
 
     public List<LibraryItem> Query(QueryParams p)
@@ -211,8 +277,7 @@ public sealed class Vault
     {
         lock (_lock)
         {
-            var item = Items.FirstOrDefault(i => i.Id == id);
-            if (item is null) return false;
+            if (!_byId.TryGetValue(id, out var item)) return false;
             item.Favorite = fav;
             _store.SaveIndex(Items);
             return true;
@@ -223,8 +288,7 @@ public sealed class Vault
     {
         lock (_lock)
         {
-            var item = Items.FirstOrDefault(i => i.Id == id);
-            if (item is null) return false;
+            if (!_byId.TryGetValue(id, out var item)) return false;
             item.UserTags = tags.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             _store.SaveIndex(Items);
             return true;
@@ -236,8 +300,9 @@ public sealed class Vault
     {
         lock (_lock)
         {
-            var item = Items.FirstOrDefault(i => i.Id == id);
-            return item is null ? (false, []) : (item.Favorite, [.. item.UserTags]);
+            return _byId.TryGetValue(id, out var item)
+                ? (item.Favorite, [.. item.UserTags])
+                : (false, []);
         }
     }
 
@@ -246,8 +311,7 @@ public sealed class Vault
     {
         lock (_lock)
         {
-            var item = Items.FirstOrDefault(i => i.Id == id);
-            if (item is null) return false;
+            if (!_byId.TryGetValue(id, out var item)) return false;
             item.Favorite = favorite;
             item.UserTags = tags.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim())
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList();

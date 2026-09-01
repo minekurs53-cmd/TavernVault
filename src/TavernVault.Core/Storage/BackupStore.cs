@@ -82,9 +82,13 @@ public sealed class BackupStore
         }
     }
 
-    /// <summary>在覆盖写入前备份文件。失败返回 null 且不抛出。</summary>
-    public BackupInfo? BackupBeforeWrite(string fullPath)
+    /// <summary>在覆盖写入前备份文件。失败返回 null 且不抛出（旧签名，保留兼容）。</summary>
+    public BackupInfo? BackupBeforeWrite(string fullPath) => BackupBeforeWrite(fullPath, out _);
+
+    /// <summary>在覆盖写入前备份文件。失败时 error 带出异常消息，便于上层显性告警。</summary>
+    public BackupInfo? BackupBeforeWrite(string fullPath, out string? error)
     {
+        error = null;
         try
         {
             if (!File.Exists(fullPath)) return null;
@@ -109,6 +113,7 @@ public sealed class BackupStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            error = ex.Message;
             return null;
         }
     }
@@ -128,16 +133,21 @@ public sealed class BackupStore
     }
 
     /// <summary>还原备份。还原前会先备份当前文件（防还原错）。返回还原到的原路径。</summary>
-    public string? Restore(string backupId)
+    public string? Restore(string backupId) => Restore(backupId, out _);
+
+    /// <summary>同上；backupWarning 带出还原前备份当前文件的失败原因（null=正常）。</summary>
+    public string? Restore(string backupId, out string? backupWarning)
     {
+        backupWarning = null;
         lock (_lock)
         {
             var info = _manifest.FirstOrDefault(b => b.Id == backupId);
             if (info is null || !File.Exists(PathFor(info))) return null;
 
             // 当前文件还在 → 先备份它，再还原
-            if (File.Exists(info.OriginalPath))
-                BackupBeforeWrite(info.OriginalPath);
+            if (File.Exists(info.OriginalPath) &&
+                BackupBeforeWrite(info.OriginalPath, out var err) is null && err is not null)
+                backupWarning = $"还原前备份当前文件失败（{err}）";
 
             File.Copy(PathFor(info), info.OriginalPath, overwrite: true);
             return info.OriginalPath;

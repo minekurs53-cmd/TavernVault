@@ -204,7 +204,7 @@ new_id = r["id"]
 item = call("GET", f"/api/items/{new_id}")
 check("文件已改名", item["fileName"] == "改名卡.json")
 check("卡片内名称不变", item.get("title") == "测试卡")
-r = call("POST", f"/api/items/{new_id}/move", {"root": "D:\\agent\\TavernVault\\testdata", "dir": "归档"})
+r = call("POST", f"/api/items/{new_id}/move", {"root": TESTDATA, "dir": "归档"})
 new_id2 = r["id"]
 item = call("GET", f"/api/items/{new_id2}")
 check("目录已移动", item["relativeDir"].replace("/", "\\") == "归档")
@@ -221,7 +221,7 @@ lore_items = call("GET", "/api/items?kind=lorebook&q=" + urllib.parse.quote("测
 guard_id = lore_items[0]["id"]
 r = call("POST", f"/api/items/{guard_id}/move", {"root": "C:\\Windows", "dir": ""})
 check("越权 root 被拒绝", r is not None and "error" in r)
-r = call("POST", f"/api/items/{guard_id}/move", {"root": "D:\\agent\\TavernVault\\testdata", "dir": "归档2"})
+r = call("POST", f"/api/items/{guard_id}/move", {"root": TESTDATA, "dir": "归档2"})
 check("库内移动正常", r is not None and r.get("ok") is True)
 
 print("== 三逻辑库（v0.4.2）==")

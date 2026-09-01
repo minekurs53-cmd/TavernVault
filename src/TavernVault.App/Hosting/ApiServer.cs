@@ -51,21 +51,15 @@ public static class ApiServer
         return app;
     }
 
-    /// <summary>首次运行时把常见的酒馆资源目录作为默认库（存在才加）。</summary>
+    /// <summary>首次运行时把常见的酒馆资源目录作为默认库（存在才加）。不含机器特定路径。</summary>
     private static void EnsureDefaultRoot(Vault vault)
     {
         if (vault.Settings.LibraryRoots.Count > 0) return;
-        var candidates = new[]
-        {
-            @"D:\agent\酒馆PR",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "酒馆PR"),
-        };
-        foreach (var guess in candidates)
-        {
-            if (!Directory.Exists(guess)) continue;
+        var guess = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "酒馆PR");
+        if (Directory.Exists(guess))
             vault.AddRoot(guess);
-            break;
-        }
+        // 不存在则保持空库，由前端空态引导用户在「库设置」中添加
     }
 
     private static void MapApi(WebApplication app, Vault vault, ThumbnailService thumbs, bool headless)
@@ -101,7 +95,7 @@ public static class ApiServer
                     tags = l.Tags.Select(t => new { tag = t.Tag, count = t.Count }),
                 }).ToList(),
                 lastScanAt = vault.LastScanAt,
-                version = typeof(ApiServer).Assembly.GetName().Version?.ToString(3),
+                version = typeof(ApiServer).Assembly.GetName().Version?.ToString(4),
             });
         });
 

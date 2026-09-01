@@ -228,7 +228,10 @@ async function showTavernWizard(onConnected) {
 
 function updateVersion() {
   const v = state.meta?.version;
-  $('#app-version').textContent = v ? 'v' + v : '';
+  // 0.4.3.1 → v0.4.3 fix-1（第 4 段为 0 的正式版显示三段）
+  const text = v ? ('v' + v).replace(/^v(\d+\.\d+\.\d+)\.(\d+)$/,
+    (m, a, b) => b === '0' ? `v${a}` : `v${a} fix-${b}`) : '';
+  $('#app-version').textContent = text;
 }
 
 export async function doRescan() {

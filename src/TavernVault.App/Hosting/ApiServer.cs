@@ -95,7 +95,7 @@ public static class ApiServer
                     tags = l.Tags.Select(t => new { tag = t.Tag, count = t.Count }),
                 }).ToList(),
                 lastScanAt = vault.LastScanAt,
-                version = typeof(ApiServer).Assembly.GetName().Version?.ToString(3),
+                version = typeof(ApiServer).Assembly.GetName().Version?.ToString(4),
             });
         });
 

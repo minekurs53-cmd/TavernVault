@@ -278,8 +278,11 @@ async function buildCharacterEditor(item, preloaded = null) {
           if (el2) payload.fields[f.key] = el2.value;
         });
       }
+      payload.expectedModified = item.modifiedAt; // 并发防护：文件被外部改动时服务端返回 409
       const r = await api.saveCard(item.id, payload);
       clearDirty();
+      if (r.warnings?.length) toast(r.warnings.join('；'), 'err');
+      item.modifiedAt = r.modifiedAt;
       toast('已保存到 ' + (item.hasEmbeddedCard ? 'PNG 内嵌数据' : 'JSON 文件'));
       refreshItems();
       refreshMeta();
@@ -462,16 +465,22 @@ async function buildLoreEditor(item, opts = {}) {
         // raw（Spec 原条目）原样回传，服务端只合并被编辑的字段
         const r = await api.saveCardBook(item.id, {
           entries: entries.map((e) => ({ key: e.key, data: e.data, raw: e.raw })),
+          expectedModified: item.modifiedAt,
         });
         clearDirty();
+        if (r.warnings?.length) toast(r.warnings.join('；'), 'err');
+        item.modifiedAt = r.modifiedAt;
         toast(`内置世界书已保存（${r.count} 个条目）`);
         refreshItems();
         refreshMeta();
       } else {
         const r = await api.saveLore(item.id, {
           entries: entries.map((e) => ({ key: e.key, data: e.data })),
+          expectedModified: item.modifiedAt,
         });
         clearDirty();
+        if (r.warnings?.length) toast(r.warnings.join('；'), 'err');
+        item.modifiedAt = r.modifiedAt;
         toast(`已保存（${r.count} 个条目）`);
         refreshItems();
         refreshMeta();
@@ -859,9 +868,11 @@ async function buildPresetEditor(item) {
     let text;
     try { text = currentText(); } catch (err) { toast(err.message, 'err'); return; }
     try {
-      await api.saveText(item.id, text);
+      const r = await api.saveText(item.id, text, item.modifiedAt);
       clearDirty();
       rawStale = false;
+      if (r.warnings?.length) toast(r.warnings.join('；'), 'err');
+      item.modifiedAt = r.modifiedAt;
       toast('已保存（保存前已自动备份）');
       refreshItems();
       refreshMeta();
@@ -962,8 +973,10 @@ async function buildRawEditor(item, kind) {
       return;
     }
     try {
-      await api.saveText(item.id, raw.area.value);
+      const r = await api.saveText(item.id, raw.area.value, item.modifiedAt);
       clearDirty();
+      if (r.warnings?.length) toast(r.warnings.join('；'), 'err');
+      item.modifiedAt = r.modifiedAt;
       toast('已保存');
       refreshItems();
       refreshMeta();

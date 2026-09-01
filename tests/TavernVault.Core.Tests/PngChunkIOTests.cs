@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.Json.Nodes;
 using TavernVault.Core.Cards;
 
 namespace TavernVault.Core.Tests;
@@ -89,6 +90,48 @@ public class PngChunkIOTests : IDisposable
         File.WriteAllBytes(bin, [1, 2, 3, 4]);
         Assert.True(PngChunkIO.IsPng(png));
         Assert.False(PngChunkIO.IsPng(bin));
+    }
+
+    [Fact]
+    public void CharacterCardFile_Save_Png_PreservesImageChunks()
+    {
+        // 回归：v0.5.0 修复的另存为数据损坏 bug——Save 只重嵌 tEXt，图像块必须字节级保留
+        var idat = new byte[] { 0x00, 0xAA, 0xBB, 0xCC, 0x11, 0x22, 0x33 };
+        var card = new JsonObject
+        {
+            ["spec"] = "chara_card_v2",
+            ["spec_version"] = "2.0",
+            ["data"] = new JsonObject { ["name"] = "原卡", ["description"] = "描述" },
+        };
+        var path = WritePng(TestPng.Build(
+            ("IDAT", idat),
+            TestPng.Text("chara", Convert.ToBase64String(Encoding.UTF8.GetBytes(card.ToJsonString())))));
+
+        var loaded = CharacterCardFile.Load(path) as JsonObject;
+        Assert.NotNull(loaded);
+        CharacterCardFile.GetDataNode(loaded!)["name"] = "编辑后";
+        CharacterCardFile.Save(path, loaded!);
+
+        var chunks = ReadChunks(File.ReadAllBytes(path));
+        Assert.Contains("IHDR", chunks.Keys);
+        Assert.Contains("IEND", chunks.Keys);
+        Assert.Equal(idat, chunks.GetValueOrDefault("IDAT"));
+        var reloaded = CharacterCardFile.Load(path) as JsonObject;
+        Assert.Equal("编辑后", CharacterCardFile.GetDataNode(reloaded!)["name"]!.GetValue<string>());
+    }
+
+    private static Dictionary<string, byte[]> ReadChunks(byte[] bytes)
+    {
+        var result = new Dictionary<string, byte[]>();
+        int pos = 8; // 跳过签名
+        while (pos + 12 <= bytes.Length)
+        {
+            uint len = BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(pos));
+            var type = Encoding.Latin1.GetString(bytes, pos + 4, 4);
+            result[type] = bytes[(pos + 8)..(pos + 8 + (int)len)];
+            pos += 12 + (int)len;
+        }
+        return result;
     }
 
     private static byte[] ReadAll(FileStream fs)

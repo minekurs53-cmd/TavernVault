@@ -1,6 +1,6 @@
 // 主界面：侧栏、过滤、网格/列表、详情抽屉
 
-import { api } from './api.js';
+import { api, imgSrc } from './api.js';
 import {
   el, $, icon, hydrateIcons, toast, fmtSize, fmtDate, escapeHtml,
   confirmDialog, promptDialog, openModal,
@@ -261,7 +261,7 @@ function tileStyle(kind) {
 function renderCard(item) {
   const km = kindMeta(item.kind);
   const media = item.hasEmbeddedCard
-    ? `<img loading="lazy" src="/api/thumb/${item.id}" alt="" onerror="this.style.display='none'">`
+    ? `<img loading="lazy" src="${imgSrc(`/api/thumb/${item.id}`)}" alt="" onerror="this.style.display='none'">`
     : `<div class="tile" style="${tileStyle(item.kind)}"><span class="ico">${icon(km.icon)}</span></div>`;
   const metaBits = [
     item.creator,
@@ -298,7 +298,7 @@ function renderCard(item) {
 function renderRow(item) {
   const km = kindMeta(item.kind);
   const media = item.hasEmbeddedCard
-    ? `<img loading="lazy" src="/api/thumb/${item.id}" alt="">`
+    ? `<img loading="lazy" src="${imgSrc(`/api/thumb/${item.id}`)}" alt="">`
     : `<span class="ico" style="color:${km.color}">${icon(km.icon)}</span>`;
   const n = el(`
     <div class="row" data-id="${item.id}">
@@ -353,7 +353,7 @@ function renderDrawer(item) {
   d.innerHTML = '';
 
   const media = item.hasEmbeddedCard
-    ? `<img src="/api/image/${item.id}" alt="" onerror="this.style.display='none'">`
+    ? `<img src="${imgSrc(`/api/image/${item.id}`)}" alt="" onerror="this.style.display='none'">`
     : `<span class="ico" style="color:${km.color}">${icon(km.icon)}</span>`;
 
   const canEdit = ['character', 'lorebook', 'preset', 'theme', 'script', 'text'].includes(item.kind);
@@ -447,6 +447,7 @@ function renderDrawer(item) {
         });
         if (name) {
           const r = await api.rename(item.id, name, !!item.rootSource);
+          if (r.warnings?.length) toast(r.warnings.join('；'), 'err');
           toast('已重命名');
           closeDrawer();
           await refreshMeta();
@@ -512,6 +513,7 @@ async function showBackups(item) {
             });
             if (!yes) return;
             const r = await api.restoreBackup(b.id);
+            if (r.warnings?.length) toast(r.warnings.join('；'), 'err');
             toast('已还原');
             mask.remove();
             closeDrawer();

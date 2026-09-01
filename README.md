@@ -54,8 +54,8 @@ TavernVault/
 │  └─ wwwroot/     # 原生 HTML/CSS/JS 前端（无构建步骤）
 │     └─ js/       # api.js / app.js(主界面) / editor.js(编辑器) / main.js(入口) / util.js
 └─ tests/
-   ├─ TavernVault.Core.Tests/   # xUnit 单元测试（36 项）
-   └─ smoke_api.py              # API 冒烟测试（49 项，需服务运行在 47999）
+   ├─ TavernVault.Core.Tests/   # xUnit 单元测试（数量以 dotnet test 输出为准）
+   └─ smoke_api.py              # API 冒烟测试（连接信息自动读数据目录 server-connection.json）
 ```
 
 ## 技术选型
@@ -84,6 +84,7 @@ TavernVault/
 | v0.4.1 | 侧栏库分组选项卡、备份位置自定义、项目文档体系 |
 | v0.4.2 | 三逻辑库选项卡（每库独立分类+二级子目录）、来源过滤与冷升级自愈 |
 | v0.4.3 | 侧栏手风琴（单开互斥）、滚动隔离布局、酒馆探测去硬编码（环境变量+约定路径，全仓库零机器特定路径）；fix-1 修复弹窗超高无法滚动，确立版本号规范 |
+| v0.5.0 | 深度优化：PNG 另存为数据损坏修复、本地 API 会话令牌+Host 校验、备份失败显性告警+滚动日志、写路径增量更新+原子写入、编辑并发防护 409、单实例防护 |
 
 后续方向（按优先级）：
 1. **预设可视化三期**：拖拽排序（写 `prompt_order.order`）、新增/删除提示词（系统项防误删）、角色分组切换
@@ -101,10 +102,22 @@ TavernVault/
 ## 测试
 
 ```bash
-dotnet test TavernVault.slnx -c Release    # 36 项单元测试
-# 冒烟测试（先启动 --server --port=47999，会创建临时测试目录，不动真实资源）
-python tests/smoke_api.py                  # 49 项
+dotnet test TavernVault.slnx -c Release    # 单元测试（数量以输出为准）
+# 冒烟测试：先启动 --server（连接信息写入数据目录 server-connection.json），再运行脚本
+./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe --server --port=47999 --data=testdata-server &
+python tests/smoke_api.py                  # 写操作只作用于 testdata/ 临时目录
 ```
+
+## 安全模型（v0.5.0）
+
+本地单用户应用的信任边界与防护：
+
+- **监听**：Kestrel 只绑 `127.0.0.1`，局域网不可达
+- **Host 校验**：`Host` 头只接受 `127.0.0.1`/`localhost`/`::1`，防 DNS rebinding（403）
+- **会话令牌**：每次启动随机生成令牌，`/api/*` 必须携带（`X-TV-Token` 头，img 标签用 `?token=` query），防本机浏览器恶意网页 drive-by 增删改文件（401）；令牌比对用恒定时间算法
+- **令牌分发**：窗口模式经 WebView2 在任何页面脚本执行前注入 `window.__TV_TOKEN__`；`--server` 模式写入数据目录 `server-connection.json`（url + token）供脚本读取
+- **接受的风险**：同用户权限的本机其它进程可读连接文件——与"能直接删文件"同级，不在威胁模型内；外部浏览器直接打开 URL 因无令牌不可用（预期）
+- **写护栏**：酒馆来源重命名/移动默认 403（`force` 放行）；删除走回收站；移动目标限已登记库根；写前备份，备份失败显性告警不静默
 
 ## 文档
 

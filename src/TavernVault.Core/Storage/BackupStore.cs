@@ -94,6 +94,8 @@ public sealed class BackupStore
             if (!File.Exists(fullPath)) return null;
             lock (_lock)
             {
+                // 目录可能被外部删除（清理工具/用户手删）：写前自愈，否则所有备份静默失败
+                Directory.CreateDirectory(_dir);
                 var ts = DateTime.Now;
                 var info = new BackupInfo
                 {
@@ -118,12 +120,13 @@ public sealed class BackupStore
         }
     }
 
-    /// <summary>列出某原文件的全部备份（新→旧）。</summary>
+    /// <summary>列出某原文件的全部备份（新→旧）。以磁盘为准：物理文件已不存在的记录不出现在结果里。</summary>
     public List<BackupInfo> List(string fullPath)
     {
         var path = Path.GetFullPath(fullPath);
         lock (_lock)
             return _manifest.Where(b => string.Equals(b.OriginalPath, path, StringComparison.OrdinalIgnoreCase))
+                .Where(b => File.Exists(PathFor(b)))
                 .OrderByDescending(b => b.SavedAt).ToList();
     }
 
@@ -142,14 +145,38 @@ public sealed class BackupStore
         lock (_lock)
         {
             var info = _manifest.FirstOrDefault(b => b.Id == backupId);
-            if (info is null || !File.Exists(PathFor(info))) return null;
+            var srcPath = info is null ? null : PathFor(info);
+            if (info is null || !File.Exists(srcPath)) return null;
+
+            // 先把源备份读入内存再触发轮转：还原前的安全备份会把本文件备份份数顶过上限，
+            // PruneLocked 会删掉"最旧"的那份——恰好常是正在还原的条目，
+            // 之后 File.Copy 就找不到源（v0.5.1 修复 N1）。
+            byte[] snapshot;
+            try { snapshot = File.ReadAllBytes(srcPath!); }
+            catch (IOException) { return null; } // 存在性检查后被占用/消失，按"备份不存在"处理
 
             // 当前文件还在 → 先备份它，再还原
             if (File.Exists(info.OriginalPath) &&
                 BackupBeforeWrite(info.OriginalPath, out var err) is null && err is not null)
                 backupWarning = $"还原前备份当前文件失败（{err}）";
 
-            File.Copy(PathFor(info), info.OriginalPath, overwrite: true);
+            // 原子写回：tmp + File.Replace，中断不产生半写的原文件
+            var tmp = info.OriginalPath + ".tmp";
+            try
+            {
+                File.WriteAllBytes(tmp, snapshot);
+                if (File.Exists(info.OriginalPath)) File.Replace(tmp, info.OriginalPath, null);
+                else File.Move(tmp, info.OriginalPath);
+            }
+            catch (PlatformNotSupportedException)
+            {
+                File.Move(tmp, info.OriginalPath, overwrite: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch (IOException) { }
+                throw;
+            }
             return info.OriginalPath;
         }
     }
@@ -215,7 +242,11 @@ public sealed class BackupStore
     {
         try
         {
-            File.WriteAllText(_manifestPath, JsonSerializer.Serialize(_manifest, JsonOpts));
+            // 与 SaveIndex/SaveSettings 一致的原子写：崩溃窗口不再留下截断的 manifest
+            Directory.CreateDirectory(_dir);
+            var tmp = _manifestPath + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(_manifest, JsonOpts));
+            File.Move(tmp, _manifestPath, overwrite: true);
         }
         catch (IOException) { }
     }

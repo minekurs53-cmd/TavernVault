@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.5.0（工作区）** · 最后更新：2026-09-01
+> 当前版本：**v0.5.1** · 最后更新：2026-09-02
 
 ---
 
@@ -42,7 +42,7 @@
 |---|---|
 | `src/TavernVault.Core` | 无 UI 依赖的核心库：PNG 数据块、角色卡/内嵌书读写、类型识别、扫描索引、设置/索引/备份持久化、文件操作。可单测 |
 | `src/TavernVault.App` | WPF 外壳 + `Hosting/ApiServer.cs`（全部 REST 端点）+ `wwwroot` 前端 + `Services`（缩略图、文件夹选择器） |
-| `tests/TavernVault.Core.Tests` | xUnit 单元测试（当前 41 项） |
+| `tests/TavernVault.Core.Tests` | xUnit 单元测试（数量以 `dotnet test` 输出为准） |
 
 ### 请求处理链路
 
@@ -84,7 +84,7 @@ App：
 - `Hosting/ApiServer.cs` — 全部端点（见 §4）+ 安全中间件（Host 白名单 + 会话令牌）+ `EnsureDefaultRoot` 首次运行默认库
 - `Hosting/AppLog.cs` — 滚动日志（数据目录 `logs/`，按日切分保留 7 天，IO 异常全吞）
 - `MainWindow.xaml.cs` — WebView2 外壳（`AddScriptToExecuteOnDocumentCreatedAsync` 注入 `window.__TV_TOKEN__`，先于页面脚本）
-- `Services/ThumbnailService.cs` — PNG 卡片缩略图缓存（`thumbs\`）
+- `Services/ThumbnailService.cs` — PNG 卡片缩略图缓存（`<数据目录>\thumbs\`，v0.5.1 起随 `--data`；源 mtime+size 旁车失效键）
 - `Services/FolderPicker.cs` — 原生文件夹选择框（无窗口模式下禁用）
 - `wwwroot/js/main.js` — 入口（主题/启动/设置弹窗/版本号）
 - `wwwroot/js/app.js` — 主界面（侧栏类型+**库分组选项卡**/网格/列表/抽屉/备份弹窗）
@@ -190,9 +190,21 @@ v0.5.0 依据 `docs/architecture-review.md`（独立架构评审）完成五项�
 - **本地 API 会话令牌 + Host 白名单（评审 2.2）**：管道最外层中间件校验 `Host ∈ {127.0.0.1, localhost, ::1}`（403 防 DNS rebinding）；`/api/*` 必须携带启动随机生成的令牌——`X-TV-Token` 头或 `?token=` query（img 标签无法带自定义头，两通道保密性等价），不匹配 401（恒定时间比较 `CryptographicOperations.FixedTimeEquals`）。令牌分发：窗口模式 WebView2 `AddScriptToExecuteOnDocumentCreatedAsync` 注入（先于任何页面脚本，对后续导航同样生效）；`--server` 模式写数据目录 `server-connection.json`（url + token，替代旧 server-url.txt）。威胁模型见 README「安全模型」。
 - **备份可观测 + 滚动日志（评审 2.3）**：`BackupStore.BackupBeforeWrite/Restore` 增加 `out error` 重载把失败原因带出；`Vault.BackupBeforeWrite` 返回 `string?` 警告文本；写端点响应带 `warnings` 数组，前端保存/还原处 toast 显性提示"本次保存无备份兜底"。`AppLog` 落数据目录 `logs/tavernvault-YYYYMMDD.log`（按日滚动、保留 7 天、异常全吞），`Handle/HandleAsync` 统一记请求错误日志。
 - **写路径增量更新 + 原子写（评审 2.5 部分）**：`Vault` 内部 `_byId` 字典（`Find` O(n)→O(1)）；新增 `UpsertItem(fullPath)` / `RemoveItem(fullPath)`，11 处编辑/另存为/还原/删除/重命名/移动端点把全量 `Rescan()`（O(库文件数) 目录枚举 + 持锁串行）替换为 O(1) 单文件更新。**`UpsertItem` 先捕获旧条目收藏/标签再重建后回填**（BuildItem 的 existingById 传空字典不会保留用户数据，实现时必须显式迁移）。`SaveSettings` 对齐 `SaveIndex` 的 tmp+Move 原子写。根级操作（`/api/roots`、tavern/connect）保留全量 Rescan。
-- **编辑并发防护 + 单实例（评审 2.5 完整）**：编辑端点（cards/book/lore/text PUT）校验请求体 `expectedModified`（前端保存时带回读取条目的 `modifiedAt`）与文件当前 mtime，差异 >1s 返回 409"文件已被外部修改"——防两个编辑窗口后写覆盖先写；保存响应回传新 `modifiedAt` 供前端更新本地副本。`App.xaml.cs` 命名 Mutex `Local\TavernVault.SingleInstance` 防双开（两个内存 Vault 共享 index.json 会互相覆盖丢更新）。
+- **编辑并发防护 + 单实例（评审 2.5 完整）**：编辑端点（cards/book/lore/text PUT）校验请求体 `expectedModified`（前端保存时带回读取条目的 `modifiedAt`）与文件当前 mtime，差异 >1s 返回 409"文件已被外部修改"——防两个编辑窗口后写覆盖先写；保存响应回传新 `modifiedAt` 供前端更新本地副本。`App.xaml.cs` 命名 Mutex 防双开（两个内存 Vault 共享 index.json 会互相覆盖丢更新）；**v0.5.1 起 Mutex 名掺数据目录哈希**（`ApiServer.ResolveDataDir`），不同数据目录可并存（窗口模式 + `--server` 冒烟），同一目录仍互斥。
 
 数字一致性（评审 2.4）：测试数、版本号不再在文档里写死——测试数以 `dotnet test` / `smoke_api.py` 输出为准，版本号只认 csproj `<Version>`；版本史唯一权威在 README 表格，本文件 §9 是叙述性历程。
+
+### 3.11 安全与可靠性加固（v0.5.1）
+
+v0.5.1 依据 `docs/full-audit-v0.5.0.md`（4 路子审计的全量审查）修复 P0×1 + P1×5 + N1/N2/N3，主题是"**不可信文件内容**与**异常路径的乐观假设**"：
+
+- **预设可视化 XSS（P0-1）**：`editor.js` 生效顺序/未排序两张卡片把第三方预设的 `p.role`（非 system/user/assistant 时回退原值）裸拼进 innerHTML——下载的预设可在 WebView2 内执行脚本并读取 `window.__TV_TOKEN__`，令牌防线对"已在持令牌方内部执行"的攻击无效。修复 = 两处 `escapeHtml(role)`，顺手加固 `mountEditor` 的 `${title}` 与 `main.js` 接入向导的 `${f.source}`。
+- **圣域边界两连（P1-5 / P1-6）**：① `LibraryScanner` 的 `AttributesToSkip` 补 `ReparsePoint`——此前 junction 环可让扫描不终止、指向库外的 junction 会把外部文件以合法条目身份纳入可改删范围；② 卡片 `name`（全项目唯一未清洗的内容字段）此前直通内嵌书导出文件路径，`Path.Combine` 吞目录 + `GetSaveAsPath` 无校验，可向库根外写文件。修复 = `Title` 统一 `Clean(…, 200)` + 新增 `FileOperations.SanitizeFileName`（`GetSaveAsPath` 内置清洗，导出端点先清洗再 Combine）。
+- **settings.json 损坏防护（P1-1）**：旧版读取异常被静默吞掉 → 空库根 → 启动期"来源漂移自愈"判定任何条目都漂移 → Rescan 用**空索引覆盖 index.json**，收藏/标签永久丢失。修复 = `LoadSettings` 区分"不存在"（默认）与"损坏"（坏文件改名 `.corrupt-*` 保留 + `LoadSettingsWarning` 经日志与 `/api/meta.settingsWarning` 外显）；自愈条件加 `LibraryRoots.Count > 0` 前置；`SaveIndex` 前轮转 `index.bak` 兜底。
+- **还原满上限自逐出（N1）**：`BackupStore.Restore` 的安全备份会把本文件份数顶过上限，`PruneLocked` 删掉的"最旧"恰是正在还原的条目 → `File.Copy` 找不到源（v0.3.0 起潜伏，v0.5.0 提速后保存变快更易堆满窗口而暴露）。修复 = 先把源备份读入内存再触发安全备份；写回改 tmp+`File.Replace` 原子落盘。单测 `Restore_Oldest_AtRetentionCap_Succeeds` + 冒烟"满上限还原"回归。
+- **备份元数据可靠性**：manifest.json 改 tmp+Move 原子写（崩溃不再截断全部记录）；`List` 按磁盘存在性过滤（运行中服务的内存 manifest 不再把已删文件的幽灵条目暴露给 UI/还原）。
+- **配套加固**：`BackupStore.BackupBeforeWrite`/`ThumbnailService.GetAsync` 写前 `CreateDirectory` 自愈（目录被外部清理后不再静默失败）；缩略图失效键改"源 mtime+size 旁车"（还原旧备份后 mtime 回退不再误判新鲜）；`ResolveDataDir` 收敛为单一入口并落绝对路径；单实例 Mutex 按数据目录哈希命名 + 只在持有时 Release；扫描器 tmp 过滤改前缀匹配（`.tmp-xxxxxxxx` 残留不再被索引）。
+- **冒烟可重复（N2）**：清理路径修正（此前双层 `testdata-server\testdata-server\backups` 是空操作）+ thumbs 一并清理；**同一数据目录连续多轮冒烟全绿**成为验收标准之一。新增"满上限还原""导出路径逃逸"两个回归段。
 
 ---
 
@@ -202,7 +214,7 @@ v0.5.0 依据 `docs/architecture-review.md`（独立架构评审）完成五项�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/meta` | 总数、分类计数（三库求和）、用户标签、roots（含来源与 count）、**libraries（三逻辑库聚合：total/rootCount/favorites/kinds/dirs/tags）**、版本号 |
+| GET | `/api/meta` | 总数、分类计数（三库求和）、用户标签、roots（含来源与 count）、**libraries（三逻辑库聚合：total/rootCount/favorites/kinds/dirs/tags）**、`settingsWarning`（设置损坏告警，正常 null）、版本号 |
 | POST | `/api/rescan` | 全量重扫，返回条目数 |
 | GET | `/api/items` | 条目查询。参数：`kind,q,tag,fav,sort(name|modified|size|kind),dir,root,source`。**source 非法值 400**，与 root AND |
 | GET | `/api/items/{id}` | 单条目 |
@@ -258,10 +270,12 @@ v0.5.0 依据 `docs/architecture-review.md`（独立架构评审）完成五项�
 %APPDATA%\TavernVault\
 ├─ settings.json    # AppSettings：LibraryRoots / UiTheme / AutoBackup / MaxBackupsPerFile / BackupRootPath
 ├─ index.json       # 索引：{ version: 3, items: [LibraryItem...] }，版本不符则丢弃重建
+├─ index.bak        # 上一版索引留档（每次 SaveIndex 前轮转，v0.5.1）
+├─ settings.json.corrupt-*  # 设置损坏时的坏文件留档（v0.5.1，正常不存在）
 ├─ backups\         # 默认备份目录（可自定义到任意位置）
 │  ├─ manifest.json # 全部备份元数据
 │  └─ <源文件名>\   # 每个源文件一个子目录存放各版本备份
-├─ thumbs\          # 角色卡缩略图缓存（可整体删除，会自动重建）
+├─ thumbs\          # 角色卡缩略图缓存（可整体删除，会自动重建；随数据目录，v0.5.1 起 --data 生效）
 ├─ logs\            # AppLog 滚动日志 tavernvault-YYYYMMDD.log（保留 7 天，v0.5.0）
 └─ server-connection.json  # 仅 --server 模式：{ url, token }，供脚本读取（v0.5.0，替代 server-url.txt）
 ```
@@ -308,7 +322,7 @@ dotnet build TavernVault.slnx -c Release
 | 层级 | 命令 / 入口 | 说明 |
 |---|---|---|
 | 单元测试 | `dotnet test TavernVault.slnx -c Release` | **数量以输出为准**。覆盖：PNG 块、内嵌书映射、备份/另存为/自定义备份位置、备份失败告警、UpsertItem 用户数据保留、PNG 保存图像块保留、增量扫描、用户数据迁移、来源过滤与 BuildLibraries 聚合（含冷升级自愈） |
-| API 冒烟 | `python tests/smoke_api.py` | **数量以输出为准**。夹具自足（自建 testdata 并注册、自清理上轮残留）；连接信息自动读 `<data>/server-connection.json`（TV_CONN/TV_BASE/TV_TOKEN 可覆写）；先 `--server --port=47999 --data=<临时目录>` 再跑；**写操作只作用于 testdata**。含 PNG 完整性回归、409 并发防护、401/403 安全负向用例 |
+| API 冒烟 | `python tests/smoke_api.py` | **数量以输出为准**。夹具自足（自建 testdata 并注册、自清理上轮残留含 backups/thumbs）；连接信息自动读 `<data>/server-connection.json`（TV_CONN/TV_BASE/TV_TOKEN 可覆写）；先 `--server --port=47999 --data=<临时目录>` 再跑；**写操作只作用于 testdata**；**同一数据目录可连续多轮运行全绿**（v0.5.1 起）。含 PNG 完整性回归、满上限还原回归、导出路径逃逸回归、409 并发防护、401/403 安全负向用例 |
 | UI 冒烟 | 浏览器自动化打开服务 URL | 页面加载失败时读 `window.__errs`（index.html 内置探针）；截图存 `ui-shots/`（已 gitignore） |
 | 真实库验证 | `GET` 任意端点 | 只读核对可以，**绝不对真实库 PUT/POST** |
 
@@ -331,11 +345,13 @@ dotnet build TavernVault.slnx -c Release
 | v0.4.2 | **三逻辑库选项卡** | 侧栏重构为三个独立逻辑库（局外存储/SillyTavern/TauriTavern，来源并集）；每库独立类型计数 + 二级子目录导航（酒馆库按功能分区根）；`Vault.BuildLibraries` 聚合 + `QueryParams.Source` 过滤（非法 source 400）；移动弹窗按来源分组；构造时来源漂移自愈；单测 36→41、冒烟 49→61（**夹具自足**） |
 | v0.4.3 | **手风琴 + 滚动隔离 + 可移植性** | 侧栏分类/子目录/标签三分区手风琴（单开互斥、0fr→1fr 平滑过渡、空分区置灰）；整窗滚动 bug 修复（html/body overflow:hidden，滚动收敛到侧栏与内容区内部，flex min-height:0 链）；`TavernDetector`/`EnsureDefaultRoot` 去硬编码（环境变量 + %USERPROFILE% 约定探测）；全仓库文档脱敏（零机器特定路径）；冒烟脚本路径改用 `TESTDATA` 变量；**fix-1** 修复弹窗超高无法滚动（`.modal` max-height + overflow-y）、版本号改四段式显示 `vX.Y.Z fix-N`、确立版本号规范（见 quick-reference） |
 | v0.5.0 | **深度优化（依据 docs/architecture-review.md）** | 修复 PNG 另存为静默数据损坏（删多余 WriteAllTextAsync + PNG 夹具回归）；本地 API 会话令牌（X-TV-Token / ?token=，恒定时间比对）+ Host 白名单 + server-connection.json；备份失败显性告警（warnings 外显 + UI toast）+ AppLog 滚动日志；写路径增量更新（`_byId` 字典 + `UpsertItem`/`RemoveItem` 替换 11 处全量 Rescan，**UpsertItem 回填收藏/标签**）+ SaveSettings 原子写；编辑并发防护（expectedModified→409）+ 单实例 Mutex；文档数字收敛（测试数/版本号单一事实源） |
+| v0.5.1 | **安全与可靠性加固（依据 docs/full-audit-v0.5.0.md）** | 详见 §3.11。P0：预设可视化 XSS（role 未转义）。P1：扫描跳过 junction、内嵌书导出文件名清洗、settings.json 损坏防护（+index.bak）、还原满上限自逐出（原子写回）、缩略图随数据目录。N1/N2/N3 既有项收尾；冒烟同目录可重复成为验收标准 |
 
-### 9.2 当前状态（截至 2026-09-01）
+### 9.2 当前状态（截至 2026-09-02）
 
-- 分支 `qoder/TavernVault`，v0.5.0 工作区改动待提交（见 §11）。
-- v0.5.0 验证情况：Release 构建 0 警告 0 错误；单元测试全绿；冒烟脚本全绿（含新增 PNG/409/安全用例）；浏览器 UI 清单通过——0 模块错误（`window.__errs` 空）、无令牌/错令牌请求 401、伪造 Host 403、数据目录连接文件不被静态托管泄露、UI 骨架（#sidebar/#app）正常渲染。
+- 分支 `qoder/TavernVault`；v0.5.1 已提交（改动：19 文件修改 + 新增两份审查文档）。
+- v0.5.1 验证情况：Release 构建 0 警告 0 错误；单元测试 49/49 全绿（新增 5 项：满上限还原、junction 跳过、SanitizeFileName、Title 清洗、settings 损坏防护）；冒烟 **81 项 × 同一数据目录连续 3 轮全绿**（新增满上限还原、导出路径逃逸回归段）；前端 5 个 js `node --check` 通过。UI 清单待跑一轮（重点：预设可视化正常渲染、含恶意 role 的预设不再注入、409 提示文案）。
+- 审查报告：`docs/full-audit-v0.5.0.md` 为当前**已知问题权威清单**（P2 项与 v0.5.2/v0.6 计划以它为准）。
 
 ### 9.3 Git 信息
 
@@ -352,6 +368,7 @@ dotnet build TavernVault.slnx -c Release
 3. 备份按"文件名"归档：两个同名不同目录的文件备份会混在同一子目录（manifest 记录了完整路径，还原不受影响，但列表会混）。
 4. 扫描是手动/操作后触发，无 FileSystemWatcher，外部改动需手动重扫。
 5. 界面文案与格式字段面向 SillyTavern 主流格式；非标准文件落到"文本/其他"分类，不会出错。
+6. move 端点尚无写前备份（rename/编辑/还原有）；409 后前端恢复路径依赖手动重扫（见 full-audit N4/N5）。
 
 ---
 
@@ -359,21 +376,23 @@ dotnet build TavernVault.slnx -c Release
 
 ### 未完成（当前收尾项）
 
-- [ ] **提交 v0.5.0**（全部改动已验证，待用户确认后 commit；推送走代理 (端口)）
+- [ ] 浏览器 UI 清单跑一轮（预设可视化渲染 / 恶意 role 不注入 / 409 文案）
 
-### 近期方向（下一两个迭代）
+### 近期方向（v0.5.2，依据 full-audit §8 路线图）
 
-1. **预设可视化三期**：拖拽排序（写 `prompt_order.order` 数组）、新增/删除提示词（系统项 `system_prompt===true` 防误删）、角色分组切换。
-2. **内嵌世界书 ← 独立世界书合入**：导出已做（`/api/cards/{id}/book/saveas`），反向导入未做。
-3. **酒馆接入增强**：聊天记录 → 角色卡反向引用检查（改名前提示哪些聊天会断链）；接入子目录白名单可配置。
+1. **备份元数据可靠性三连**：RelocateTo 两阶段迁移、Load 缺席记录保留（防备份目录瞬时不可见清空记录）——full-audit P1-2/P1-3。
+2. **角色卡编辑器重构**：Tab 事件委托 + 保存后双视图互刷 + Esc 栈顶分发——full-audit P1-7/P1-8/P1-10（含静默数据丢失两条路径）。
+3. **测试补齐**：酒馆护栏（403/force/强制备份/TT 10 份）零断言是最大缺口；settings/backup 全分支、409 四端点、错误合同批补。
+4. **N5**：409 后前端自动重扫 + 重取条目；**N4**：move 补写前备份。
 
-### 中远期方向
+### 中远期方向（v0.6+）
 
 4. **可移植性（长远方向，v0.4.3 起步）**：目标是在任何电脑上开箱即用。v0.4.3 已完成去硬编码 + 环境变量/约定路径探测 + 文档脱敏；后续计划：**首次启动向导**（无库时引导选择资源目录/自动探测酒馆）、探测规则进一步配置化（settings.json 持久化候选路径）、可选"便携模式"（数据目录随程序目录而非 %APPDATA%）。
 5. **重复资源检测**：内容指纹（如哈希）识别同一资源的多个副本，配合整理建议。
 6. **FileSystemWatcher**：监视库目录变化自动重扫；配套批量操作（多选移动/打标）。
 7. **内容指纹追踪用户数据**：外部改名后收藏/标签仍能找回（替代纯路径哈希 Id）。
 8. **形态扩展**：Core 层无 UI 依赖，可直接复用做 CLI 或托盘工具。
+9. **功能路线**（以 README「后续方向」为准）：预设可视化三期（拖拽排序/增删提示词）、内嵌世界书 ← 独立世界书合入、酒馆接入增强（断链提示/子目录白名单）。
 
 ---
 
@@ -390,4 +409,4 @@ dotnet build TavernVault.slnx -c Release
 
 ---
 
-**文档版本**：3.0 · **最后更新**：2026-09-01 · 对应程序版本 v0.5.0
+**文档版本**：3.1 · **最后更新**：2026-09-02 · 对应程序版本 v0.5.1

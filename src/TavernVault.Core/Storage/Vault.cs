@@ -33,6 +33,8 @@ public sealed class Vault
     public AppSettings Settings { get; private set; }
     public DateTime LastScanAt { get; private set; }
     public string DataDir => _store.DataDir;
+    /// <summary>设置文件损坏等启动期告警（经日志与 /api/meta.settingsWarning 外显）；正常为 null。</summary>
+    public string? SettingsWarning => _store.LoadSettingsWarning;
 
     public Vault(SettingsStore? store = null)
     {
@@ -45,7 +47,10 @@ public sealed class Vault
         // 来源一致性自愈：--server 冷启动与手改索引不会自动重扫，
         // 条目缺 RootSource 字段会反序列化为 Normal、根来源被改后旧条目也不会自动跟进。
         // 发现漂移立即重扫一次（增量复用分支会无条件按当前根刷新 RootSource）。
-        if (Items.Any(i => RootContaining(i.FullPath)?.Source != i.RootSource))
+        // 库根为空时必须跳过：settings.json 损坏被重置后 RootContaining 恒为 null，
+        // 任何非空索引都会被判定"漂移"，重扫会用空索引覆盖 index.json、丢光收藏/标签（v0.5.1）。
+        if (Settings.LibraryRoots.Count > 0 &&
+            Items.Any(i => RootContaining(i.FullPath)?.Source != i.RootSource))
             Rescan();
     }
 

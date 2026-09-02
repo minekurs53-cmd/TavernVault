@@ -205,9 +205,9 @@ async function showTavernWizard(onConnected) {
 
   list.innerHTML = found.map((f) => `
     <div class="tw-row">
-      <div class="tw-name"><span class="root-badge ${f.source}">${f.source === 'tavernST' ? 'ST' : 'TT'}</span> ${escapeHtml(f.label)}</div>
+      <div class="tw-name"><span class="root-badge ${escapeHtml(f.source)}">${f.source === 'tavernST' ? 'ST' : 'TT'}</span> ${escapeHtml(f.label)}</div>
       <div class="tw-sub">${escapeHtml(f.subdirs.join('、'))}</div>
-      <button class="btn primary sm" data-src="${f.source}">接入</button>
+      <button class="btn primary sm" data-src="${escapeHtml(f.source)}">接入</button>
     </div>`).join('');
 
   list.addEventListener('click', async (e) => {

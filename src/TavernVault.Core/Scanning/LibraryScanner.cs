@@ -30,13 +30,16 @@ public sealed class LibraryScanner
             {
                 RecurseSubdirectories = true,
                 IgnoreInaccessible = true,
-                AttributesToSkip = FileAttributes.Hidden | FileAttributes.System,
+                // ReparsePoint 必须跳过：junction 环会让递归不终止，
+                // 指向库外的 junction 会把外部文件索引进"可改删"范围，击穿库根边界
+                AttributesToSkip = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint,
             };
 
             foreach (var path in Directory.EnumerateFiles(root.Path, "*", opts))
             {
                 var ext = Path.GetExtension(path);
-                if (ext.Equals(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
+                // PngChunkIO 的临时文件形如 "x.png.tmp-xxxxxxxx"，按前缀过滤
+                if (ext.StartsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
 
                 var full = Path.GetFullPath(path);
                 if (!seen.Add(full)) continue;
@@ -158,7 +161,8 @@ public sealed class LibraryScanner
     private static void FillFromCard(LibraryItem item, JsonObject card)
     {
         var data = CharacterCardFile.GetDataNode(card);
-        item.Title = AsString(data["name"]);
+        // Title 会进入界面与文件名派生（如内嵌书导出），必须清洗控制符并限长
+        item.Title = Clean(AsString(data["name"]), 200);
         item.Creator = AsString(data["creator"]);
         item.Version = AsString(data["character_version"]);
         item.Description = Clean(AsString(data["description"]), 400);
@@ -193,13 +197,13 @@ public sealed class LibraryScanner
             .Select(e => AsString(e["comment"]) is { Length: > 0 } c ? c : Clean(AsString(e["content"]), 60))
             .Where(s => !string.IsNullOrWhiteSpace(s)));
         item.Description = Clean(preview, 300);
-        item.Title = AsString(obj["name"]);
+        item.Title = Clean(AsString(obj["name"]), 200);
     }
 
     private static void FillFromPreset(LibraryItem item, JsonObject obj)
     {
         if (obj["prompts"] is JsonArray arr) item.EntryCount = arr.Count;
-        item.Title = AsString(obj["name"]);
+        item.Title = Clean(AsString(obj["name"]), 200);
         var model = AsString(obj["openai_model"]);
         item.Description = model is { Length: > 0 } ? $"模型：{Clean(model, 80)}" : null;
     }

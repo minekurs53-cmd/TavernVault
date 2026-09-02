@@ -22,17 +22,19 @@ def load_conn():
     token = os.environ.get("TV_TOKEN")
     if base and token:
         return base, token
-    conn = os.environ.get("TV_CONN", "testdata-server/server-connection.json")
-    if not os.path.exists(conn):
-        print(f"未找到连接文件 {conn}。请先启动服务：")
+    global CONN_PATH
+    CONN_PATH = os.path.abspath(os.environ.get("TV_CONN", "testdata-server/server-connection.json"))
+    if not os.path.exists(CONN_PATH):
+        print(f"未找到连接文件 {CONN_PATH}。请先启动服务：")
         print("  ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe "
               "--server --port=47999 --data=testdata-server &")
         sys.exit(2)
-    with open(conn, encoding="utf-8") as f:
+    with open(CONN_PATH, encoding="utf-8") as f:
         cfg = json.load(f)
     return cfg["url"], cfg["token"]
 
 
+CONN_PATH = os.path.abspath(os.environ.get("TV_CONN", "testdata-server/server-connection.json"))
 BASE, TOKEN = load_conn()
 ok_count = 0
 fail_count = 0
@@ -94,11 +96,13 @@ for sub in ("归档", "归档2"):
 for fn in os.listdir(TESTDATA):
     if "-副本" in fn:
         os.remove(os.path.join(TESTDATA, fn))
-# 数据目录备份同理：上轮运行的备份会混入本轮 manifest（按文件名归档），清掉保证可重复
-bk_dir = os.path.join(os.path.dirname(os.path.abspath("testdata-server/server-connection.json")) or ".",
-                      "testdata-server", "backups")
-if os.path.isdir(bk_dir):
-    shutil.rmtree(bk_dir, ignore_errors=True)
+# 数据目录备份/缩略图同理：上轮运行的备份会混入本轮 manifest（按文件名归档），清掉保证可重复。
+# 路径基于连接文件所在目录推导（v0.5.1 修复 N2：此前错误拼出双层 testdata-server 导致清理空操作）
+conn_dir = os.path.dirname(CONN_PATH)
+for sub in ("backups", "thumbs"):
+    d = os.path.join(conn_dir, sub)
+    if os.path.isdir(d):
+        shutil.rmtree(d, ignore_errors=True)
 with open(os.path.join(TESTDATA, "测试卡.json"), "w", encoding="utf-8") as f:
     json.dump({
         "spec": "chara_card_v2",
@@ -221,6 +225,37 @@ mid = call("GET", f"/api/items/{card_items[0]['id']}/backups")[0]
 check("删除备份", call("DELETE", f"/api/backups/{mid['id']}", {}) .get("ok") is True)
 stats = call("GET", "/api/backups/stats")
 check("备份统计与开关", stats.get("autoBackup") is True and stats.get("maxPerFile") >= 1)
+
+print("== 满上限还原（v0.5.1 N1 回归）==")
+with open(os.path.join(TESTDATA, "轮转卡.json"), "w", encoding="utf-8") as f:
+    json.dump({"spec": "chara_card_v2", "spec_version": "2.0",
+               "data": {"name": "轮转卡", "description": "初始"}}, f, ensure_ascii=False)
+call("POST", "/api/rescan")
+rot = call("GET", "/api/items?q=" + urllib.parse.quote("轮转卡"))[0]
+for i in range(6):  # 连续 6 次编辑把默认 5 份的保留窗口堆满
+    call("PUT", f"/api/cards/{rot['id']}", {"fields": {"description": f"轮转{i}"}})
+bks = call("GET", f"/api/items/{rot['id']}/backups")
+check("备份堆满保留窗口", len(bks) == 5, f"共 {len(bks)} 份")
+r = call("POST", f"/api/backups/{bks[-1]['id']}/restore", {})
+check("满上限还原最旧成功", r.get("ok") is True, str(r))
+after = call("GET", f"/api/cards/{rot['id']}")["card"]["data"]["description"]
+check("还原回最旧内容", after == "轮转0", after)
+check("还原后仍保留 5 份", len(call("GET", f"/api/items/{rot['id']}/backups")) == 5)
+call("POST", f"/api/items/{rot['id']}/delete", {})
+
+print("== 导出路径逃逸（v0.5.1 P1-6 回归）==")
+with open(os.path.join(TESTDATA, "路径卡.json"), "w", encoding="utf-8") as f:
+    json.dump({"spec": "chara_card_v2", "spec_version": "2.0",
+               "data": {"name": "..\\..\\evil 路径卡", "description": "x"}}, f, ensure_ascii=False)
+call("POST", "/api/rescan")
+evil = call("GET", "/api/items?q=" + urllib.parse.quote("路径卡"))[0]
+r = call("POST", f"/api/cards/{evil['id']}/book/saveas", {"entries": []})
+fn = r.get("fileName", "")
+check("导出成功", r.get("ok") is True, fn)
+check("导出文件名无路径分隔符", bool(fn) and "/" not in fn and "\\" not in fn, fn)
+check("导出文件落在库内", os.path.isfile(os.path.join(TESTDATA, fn)))
+call("POST", f"/api/items/{r['id']}/delete", {})
+call("POST", f"/api/items/{evil['id']}/delete", {})
 
 print("== 另存为（自动命名）==")
 full_card = call("GET", f"/api/cards/{card_items[0]['id']}")["card"]

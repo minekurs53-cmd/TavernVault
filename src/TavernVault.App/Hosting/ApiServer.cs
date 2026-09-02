@@ -36,12 +36,12 @@ public static class ApiServer
         var port = Array.Find(args, a => a.StartsWith("--port="));
         builder.WebHost.UseUrls(port is null ? "http://127.0.0.1:0" : $"http://127.0.0.1:{port[7..]}");
 
-        string? dataDir = Array.Find(args, a => a.StartsWith("--data=")) is { } d ? d[7..] : null;
-        var vault = new Vault(new SettingsStore(dataDir));
+        var vault = new Vault(new SettingsStore(ResolveDataDir(args)));
         AppLog.Init(vault.DataDir);
         AppLog.Info($"启动 v{typeof(ApiServer).Assembly.GetName().Version?.ToString(4)}（数据目录 {vault.DataDir}）");
+        if (vault.SettingsWarning is { } warn) AppLog.Warn(warn);
         EnsureDefaultRoot(vault);
-        var thumbs = new ThumbnailService();
+        var thumbs = new ThumbnailService(vault.DataDir);
         var headless = args.Contains("--server");
         var token = Array.Find(args, a => a.StartsWith("--token=")) is { } t
             ? ValidateToken(t[8..])
@@ -85,6 +85,16 @@ public static class ApiServer
         MapApi(app, vault, thumbs, headless);
         return new ApiServerHandle(app, token, vault.DataDir);
     }
+
+    /// <summary>
+    /// 解析数据目录（--data= 优先，否则 %APPDATA%\TavernVault）。
+    /// 结果固定为绝对路径（启动时冻结，不随进程工作目录漂移）。
+    /// App 启动期的单实例 Mutex 名也要用它，必须与 SettingsStore 的默认值保持同一来源。
+    /// </summary>
+    public static string ResolveDataDir(string[] args) =>
+        Array.Find(args, a => a.StartsWith("--data=")) is { } d && d[7..].Trim().Length > 0
+            ? Path.GetFullPath(d[7..])
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TavernVault");
 
     private static string ValidateToken(string token)
     {
@@ -144,6 +154,7 @@ public static class ApiServer
                     tags = l.Tags.Select(t => new { tag = t.Tag, count = t.Count }),
                 }).ToList(),
                 lastScanAt = vault.LastScanAt,
+                settingsWarning = vault.SettingsWarning,
                 version = typeof(ApiServer).Assembly.GetName().Version?.ToString(4),
             });
         });
@@ -314,7 +325,11 @@ public static class ApiServer
             }
             var displayName = item.DisplayName;
             var dir = Path.GetDirectoryName(item.FullPath)!;
-            var newPath = FileOperations.GetSaveAsPath(Path.Combine(dir, displayName + ".json"));
+            // DisplayName 来自卡片内容（不可信），必须清洗为单段文件名，
+            // 否则绝对路径/.. 会借 Path.Combine 逃逸库根（v0.5.1 修复）
+            var safeName = FileOperations.SanitizeFileName(displayName);
+            if (safeName.Length == 0) safeName = "未命名";
+            var newPath = FileOperations.GetSaveAsPath(Path.Combine(dir, safeName + ".json"));
             var doc = new JsonObject { ["entries"] = entries };
             await File.WriteAllTextAsync(newPath, doc.ToJsonString(JsonOptions.WriteIndented), new UTF8Encoding(false));
             vault.UpsertItem(newPath);

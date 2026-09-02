@@ -67,9 +67,11 @@ TavernVault/
 
 ## 数据位置
 
-- 设置与索引：`%APPDATA%\TavernVault\settings.json`、`index.json`
-- 备份：默认 `%APPDATA%\TavernVault\backups\`，可在库设置中改为任意位置（现有备份自动迁移）
-- 缩略图缓存：`%APPDATA%\TavernVault\thumbs\`（可整体删除，自动重建）
+- 设置与索引：`<数据目录>\settings.json`、`index.json`（另存 `index.bak` 上一版留档；设置损坏时坏文件改名 `settings.json.corrupt-*` 保留）
+- 数据目录默认 `%APPDATA%\TavernVault\`，可用 `--data=` 覆盖
+- 备份：默认 `<数据目录>\backups\`，可在库设置中改为任意位置（现有备份自动迁移）
+- 缩略图缓存：`<数据目录>\thumbs\`（可整体删除，自动重建）
+- 日志：`<数据目录>\logs\`（按日切分保留 7 天）
 - 你的资源文件本体永远不会被程序移动或修改，除非主动执行编辑/文件操作；删除一律进回收站
 
 ## 版本历程与路线图
@@ -85,6 +87,7 @@ TavernVault/
 | v0.4.2 | 三逻辑库选项卡（每库独立分类+二级子目录）、来源过滤与冷升级自愈 |
 | v0.4.3 | 侧栏手风琴（单开互斥）、滚动隔离布局、酒馆探测去硬编码（环境变量+约定路径，全仓库零机器特定路径）；fix-1 修复弹窗超高无法滚动，确立版本号规范 |
 | v0.5.0 | 深度优化：PNG 另存为数据损坏修复、本地 API 会话令牌+Host 校验、备份失败显性告警+滚动日志、写路径增量更新+原子写入、编辑并发防护 409、单实例防护 |
+| v0.5.1 | 安全与可靠性加固（依据 `docs/full-audit-v0.5.0.md`）：预设可视化 XSS 修复（第三方文件内容不再可注入脚本）、扫描跳过 junction（库外文件不再可能被索引改删）、内嵌书导出文件名清洗（杜绝路径逃逸）、settings.json 损坏防护+index.bak 留档、还原满上限自逐出修复（原子写回）、缩略图随数据目录、单实例 Mutex 按数据目录隔离、冒烟可重复（同目录连跑全绿） |
 
 后续方向（按优先级）：
 1. **预设可视化三期**：拖拽排序（写 `prompt_order.order`）、新增/删除提示词（系统项防误删）、角色分组切换
@@ -105,10 +108,10 @@ TavernVault/
 dotnet test TavernVault.slnx -c Release    # 单元测试（数量以输出为准）
 # 冒烟测试：先启动 --server（连接信息写入数据目录 server-connection.json），再运行脚本
 ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe --server --port=47999 --data=testdata-server &
-python tests/smoke_api.py                  # 写操作只作用于 testdata/ 临时目录
+python tests/smoke_api.py                  # 写操作只作用于 testdata/ 临时目录；同一数据目录可重复运行（自动清理上轮残留）
 ```
 
-## 安全模型（v0.5.0）
+## 安全模型（v0.5.0，v0.5.1 补强）
 
 本地单用户应用的信任边界与防护：
 
@@ -116,6 +119,7 @@ python tests/smoke_api.py                  # 写操作只作用于 testdata/ 临
 - **Host 校验**：`Host` 头只接受 `127.0.0.1`/`localhost`/`::1`，防 DNS rebinding（403）
 - **会话令牌**：每次启动随机生成令牌，`/api/*` 必须携带（`X-TV-Token` 头，img 标签用 `?token=` query），防本机浏览器恶意网页 drive-by 增删改文件（401）；令牌比对用恒定时间算法
 - **令牌分发**：窗口模式经 WebView2 在任何页面脚本执行前注入 `window.__TV_TOKEN__`；`--server` 模式写入数据目录 `server-connection.json`（url + token）供脚本读取
+- **内容即攻击面**（v0.5.1）：下载的卡/预设是不可信内容——预设可视化编辑器全部插值经 HTML 转义；卡片 `name` 等内容字段经清洗后才允许参与文件名派生（导出/另存为不可能写出库根）；扫描跳过 junction/符号链接，库外文件不可能借链接进入"可改删"范围
 - **接受的风险**：同用户权限的本机其它进程可读连接文件——与"能直接删文件"同级，不在威胁模型内；外部浏览器直接打开 URL 因无令牌不可用（预期）
 - **写护栏**：酒馆来源重命名/移动默认 403（`force` 放行）；删除走回收站；移动目标限已登记库根；写前备份，备份失败显性告警不静默
 
@@ -125,3 +129,5 @@ python tests/smoke_api.py                  # 写操作只作用于 testdata/ 临
 - `docs/architecture-visualization.md` —— 架构与流程图集（Mermaid）
 - `docs/quick-reference.md` —— 开发速查：命令 / API / 数据格式坑 / 故障排查
 - `docs/st-sync-feasibility.md` —— 酒馆接入可行性分析（历史决策依据）
+- `docs/full-audit-v0.5.0.md` —— **全面安全与质量审查报告**（含全部已知问题的权威清单与修复路线图）
+- `docs/v0.5.0-verification-and-plan.md` —— v0.5.0 修复验证记录与上一轮计划（历史）

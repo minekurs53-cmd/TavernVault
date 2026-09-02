@@ -3,3 +3,6 @@ obj/
 *.user
 .vs/
 ui-shots/
+testdata/
+testdata-server/
+.smoke/

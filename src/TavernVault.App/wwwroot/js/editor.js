@@ -27,7 +27,7 @@ function mountEditor(item, title, tabsHtml = '') {
   overlay.innerHTML = `
     <div class="editor-head">
       <button class="icon-btn editor-close" title="关闭 (Esc)"><span class="ico">${icon('x')}</span></button>
-      <h2>${title}</h2>
+      <h2>${escapeHtml(title)}</h2>
       <span class="file-name">${escapeHtml(item.fileName)}</span>
       <span class="dirty-dot" title="有未保存的修改"></span>
       <div class="spacer"></div>
@@ -659,7 +659,8 @@ async function buildPresetEditor(item) {
       const p = byId.get(o.identifier);
       const isMarker = p?.marker === true || p?.system_prompt === true;
       const name = p?.name || o.identifier;
-      const role = isMarker ? '系统' : (p?.role ? (ROLE_LABELS[p.role] || p.role) : '—');
+      // role 来自第三方预设文件内容（不可信），非标准取值回退原值时必须转义（v0.5.1 XSS 修复）
+      const role = isMarker ? '系统' : (p?.role ? (ROLE_LABELS[p.role] || escapeHtml(p.role)) : '—');
       const len = p?.content ? p.content.length : 0;
 
       const row = el(`<div class="preset-row ${o.enable ? '' : 'off'}">
@@ -706,7 +707,7 @@ async function buildPresetEditor(item) {
         <span class="po-idx">·</span>
         <span class="po-cb"></span>
         <span class="po-name">${escapeHtml(p.name || p.identifier)}</span>
-        <span class="po-role">${isMarker ? '系统' : (ROLE_LABELS[p.role] || p.role || '—')}</span>
+        <span class="po-role">${isMarker ? '系统' : (ROLE_LABELS[p.role] || escapeHtml(p.role) || '—')}</span>
         <span class="po-len">${p.content ? p.content.length + ' 字' : ''}</span>
       </div>`);
       row.addEventListener('click', () => {

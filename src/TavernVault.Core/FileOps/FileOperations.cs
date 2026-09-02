@@ -36,13 +36,27 @@ public static class FileOperations
     }
 
     /// <summary>
+    /// 把任意文本（如卡片内嵌的 name 字段——不可信内容）清洗为安全的单段文件名：
+    /// 去除路径分隔符与系统保留字符、去除结尾的点/空格；结果只含一个路径段，绝不逃逸所在目录。
+    /// 清洗后为空（空串/纯点）返回空串，由调用方回退默认名。
+    /// </summary>
+    public static string SanitizeFileName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "";
+        var cleaned = string.Join("_", name.Split(Path.GetInvalidFileNameChars())).Trim();
+        cleaned = cleaned.TrimEnd('.', ' ');
+        return cleaned is "." or ".." ? "" : cleaned;
+    }
+
+    /// <summary>
     /// 为"另存为"生成同目录下的自动命名路径："{原名}-副本 yyyy-MM-dd_HHmmss{扩展名}"，
-    /// 重名时追加序号。
+    /// 重名时追加序号。stem 会被 SanitizeFileName 清洗，杜绝经此路径写出库根。
     /// </summary>
     public static string GetSaveAsPath(string originalPath)
     {
         var dir = Path.GetDirectoryName(originalPath) ?? "";
-        var stem = Path.GetFileNameWithoutExtension(originalPath);
+        var stem = SanitizeFileName(Path.GetFileNameWithoutExtension(originalPath));
+        if (stem.Length == 0) stem = "未命名";
         var ext = Path.GetExtension(originalPath);
         var ts = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
         var candidate = Path.Combine(dir, $"{stem}-副本 {ts}{ext}");

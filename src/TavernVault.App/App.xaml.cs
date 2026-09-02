@@ -11,6 +11,7 @@ public partial class App : Application
 {
     private WebApplication? _server;
     private Mutex? _singleInstance;
+    private bool _ownsMutex;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -24,8 +25,14 @@ public partial class App : Application
             args.Handled = true;
         };
 
-        // 单实例防护：双开会形成两个内存 Vault 共享同一 index.json/settings.json，互相覆盖丢更新
-        _singleInstance = new Mutex(true, @"Local\TavernVault.SingleInstance", out var createdNew);
+        // 单实例防护：双开会形成两个内存 Vault 共享同一 index.json/settings.json，互相覆盖丢更新。
+        // Mutex 按数据目录哈希命名（与 ApiServer.ResolveDataDir 同源）：
+        // 不同数据目录（如窗口模式 + --server 冒烟）可以并存，同一目录仍然互斥（v0.5.1）。
+        var dataDir = Path.GetFullPath(ApiServer.ResolveDataDir(e.Args)).TrimEnd('\\').ToLowerInvariant();
+        var mutexKey = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(dataDir)))[..12];
+        _singleInstance = new Mutex(true, @"Local\TavernVault." + mutexKey, out var createdNew);
+        _ownsMutex = createdNew;
         if (!createdNew)
         {
             MessageBox.Show("酒馆资源管家已在运行（同一数据目录只允许一个实例）。",
@@ -75,7 +82,10 @@ public partial class App : Application
     {
         if (_server is not null)
             await _server.StopAsync();
-        _singleInstance?.ReleaseMutex();
+        // 只有真正持有所有权的线程才能 Release，否则抛 ApplicationException；
+        // 进程退出时 OS 会自动放弃未释放的 Mutex，这里释放只是提前归还
+        if (_ownsMutex)
+            _singleInstance?.ReleaseMutex();
         _singleInstance?.Dispose();
         base.OnExit(e);
     }

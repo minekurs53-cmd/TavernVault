@@ -59,6 +59,44 @@ public class BackupAndSaveAsTests : IDisposable
     }
 
     [Fact]
+    public void Restore_Oldest_AtRetentionCap_Succeeds()
+    {
+        // N1 回归：满上限时还原"最旧"备份——还原前的安全备份会触发轮转并删除该条目，
+        // 修复前 File.Copy 找不到源而必然失败
+        var store = new BackupStore(_dir + "-cap") { MaxPerFile = 3 };
+        var file = WriteFile("轮转.json", "v0");
+        var ids = new List<string>();
+        for (int i = 0; i < 4; i++)
+        {
+            ids.Add(store.BackupBeforeWrite(file)!.Id);
+            File.WriteAllText(file, "v" + (i + 1));
+            Thread.Sleep(15);
+        }
+        Assert.Equal(3, store.List(file).Count); // v0 已被轮转删除，最旧留存 = v1
+
+        var restored = store.Restore(ids[1]);
+        Assert.Equal(file, restored);
+        Assert.Equal("v1", File.ReadAllText(file));
+        Assert.Equal(3, store.List(file).Count); // 还原动作自身产生的安全备份同样受轮转约束
+    }
+
+    [Fact]
+    public void SanitizeFileName_Blocks_Path_Escape()
+    {
+        Assert.Equal("C__Users_evil", FileOperations.SanitizeFileName(@"C:\Users\evil"));
+        Assert.Equal("", FileOperations.SanitizeFileName(".."));
+        Assert.Equal("", FileOperations.SanitizeFileName("   "));
+        Assert.Equal("卡", FileOperations.SanitizeFileName("卡"));
+        var tricky = FileOperations.SanitizeFileName(@"..\..\a/b");
+        Assert.DoesNotContain('\\', tricky);
+        Assert.DoesNotContain('/', tricky);
+
+        // GetSaveAsPath 的产物必须仍落在原文件目录内（stem 可能来自不可信卡片 name）
+        var path = FileOperations.GetSaveAsPath(@"C:\lib\sub\evil.json");
+        Assert.Equal(@"C:\lib\sub", Path.GetDirectoryName(path));
+    }
+
+    [Fact]
     public void BackupStore_Relocate_Moves_Files_And_Manifest()
     {
         var store = new BackupStore(Path.Combine(_dir, "data")) { MaxPerFile = 5 };

@@ -1,7 +1,7 @@
 # TavernVault 架构与流程可视化
 
 > 配套 `docs/development-handoff.md` §2-§3 的图集。所有图为 Mermaid 源码，可在 GitHub / VS Code（Mermaid 插件）直接渲染。
-> 最后更新：2026-09-01 · 对应 v0.5.0
+> 最后更新：2026-09-02 · 对应 v0.5.1
 
 ## 1. 系统分层架构
 
@@ -17,7 +17,7 @@ graph TB
         end
         subgraph Kestrel["Kestrel (只监听 127.0.0.1)"]
             STATIC["静态文件托管<br/>no-cache"]
-            REST["ApiServer.MapApi<br/>31 个 REST 端点"]
+            REST["ApiServer.MapApi<br/>35 个 REST 端点"]
         end
         SVCS["Services<br/>缩略图 / 文件夹选择器"]
     end
@@ -65,18 +65,18 @@ flowchart TD
     Start(["App.OnStartup"]) --> Parse["解析命令行参数<br/>--server / --port= / --data="]
     Parse --> Build["ApiServer.Build"]
     Build --> Default{"首次运行?<br/>LibraryRoots 为空"}
-    Default -->|"是"| Guess["EnsureDefaultRoot<br/>探测 %USERPROFILE%\酒馆PR 等约定路径"]
-    Default -->|"否"| Vault["new Vault(settingsStore)<br/>加载设置 + 索引 + 备份存储"]
+    Default -->|"是"| Guess["EnsureDefaultRoot<br/>探测 %USERPROFILE%\酒馆PR（存在才注册）"]
+    Default -->|"否"| Vault["new Vault(settingsStore)<br/>加载设置 + 索引 + 备份存储<br/>settings 损坏 → 告警 + 跳过自愈"]
     Guess --> Vault
     Vault --> Listen["Kestrel 监听<br/>127.0.0.1:随机或指定端口"]
     Listen --> Mode{"--server 模式?"}
-    Mode -->|"是"| Headless["无窗口运行<br/>URL 落盘 server-url.txt"]
-    Mode -->|"否"| Window["new MainWindow(url)<br/>WebView2 打开前端"]
+    Mode -->|"是"| Headless["无窗口运行<br/>{url, token} 落盘 server-connection.json"]
+    Mode -->|"否"| Window["new MainWindow(url, token)<br/>WebView2 注入令牌后打开前端"]
 ```
 
 ## 3. 一次"编辑角色卡并保存"的完整时序
 
-所有覆盖写入共用这条安全链路：**先备份 → 写盘 → 重扫**。
+所有覆盖写入共用这条安全链路：**备份 → 写盘 → 单文件增量更新索引**（v0.5.0 起不再全量 Rescan）。
 
 ```mermaid
 sequenceDiagram
@@ -86,24 +86,24 @@ sequenceDiagram
     participant V as Vault
     participant B as BackupStore
     participant C as CharacterCardFile
-    participant S as LibraryScanner
     participant D as 磁盘
 
     U->>F: 修改字段并点击保存
-    F->>A: {fields: {...}, tags: [...]}
+    F->>A: {fields, tags, expectedModified}
+    A->>V: Find(id)
+    A->>A: CheckNotModified：<br/>文件 mtime 与 expectedModified 差 >1s → 409
     A->>D: 读原卡片 (Load)
     A->>A: 合并字段到 data 节点<br/>(JsonNode 只改目标节点)
     A->>V: BackupBeforeWrite(fullPath)
     V->>V: 判断 AutoBackup 或酒馆源<br/>(酒馆源无视开关强制备份)
-    V->>B: BackupBeforeWrite + RetentionFor
-    B->>D: 备份原文件到备份目录<br/>manifest.json 记录
+    V->>B: BackupBeforeWrite + RetentionFor<br/>失败 → 响应带 warnings
+    B->>D: 备份原文件到备份目录<br/>manifest.json 原子记录
     A->>C: Save(path, card)
     C->>D: PNG: 重写 chara+ccv3 两个 tEXt 块<br/>其余块字节级保留
     C->>D: JSON: SyncLegacyMirror 根级镜像同步
-    A->>S: Rescan()
-    S-->>A: 新条目数
-    A-->>F: {ok, id}
-    F-->>U: 提示保存成功
+    A->>V: UpsertItem(fullPath)<br/>单文件增量更新 + 回填收藏/标签
+    A-->>F: {ok, id, warnings, modifiedAt}
+    F-->>U: 提示保存成功（有 warnings 则报错色提示）
 ```
 
 ## 4. 扫描与增量索引
@@ -120,11 +120,14 @@ flowchart TD
     Digest --> NewItem["生成新条目<br/>Id = 完整路径哈希"]
     Reuse --> Merge["合并全部结果"]
     NewItem --> Merge
-    Merge --> Version{"index.json 版本 == 3?"}
-    Version -->|"否"| Drop["丢弃整个旧索引<br/>全部重建"]
-    Version -->|"是"| Persist["保存 index.json<br/>+ LastScanAt"]
-    Drop --> Persist
+    Merge --> Persist["保存 index.json<br/>(tmp+Move 原子写, 旧版留档 index.bak)"]
     Persist --> Done(["返回条目数"])
+
+    note right of Start
+        索引版本门控在 LoadIndex（启动加载时）：
+        version != 3 直接丢弃旧索引返回空，
+        由本次全量扫描重建——不在扫描尾部判断
+    end note
 ```
 
 ## 5. 备份生命周期（单文件视角）
@@ -143,6 +146,9 @@ stateDiagram-v2
         保留份数 RetentionFor:
         普通库 = 用户设置(默认5)
         TauriTavern 源 = 固定10
+        还原(v0.5.1): 先把所选备份读入内存
+        再安全备份当前版本 → 满上限轮转
+        不会删掉正在还原的条目; 写回原子
     end note
 ```
 
@@ -200,11 +206,10 @@ flowchart TD
     Guard -->|"是(酒馆源)"--> Force{"请求带 force:true ?"}
     Force -->|"否"| R403["403: 酒馆聊天按文件名/路径<br/>引用角色卡, 拒绝"]
     Force -->|"是"| Confirm["前端已弹风险确认框"] --> Snap
-    Snap --> BK["BackupBeforeWrite"]
+    Snap --> BK["BackupBeforeWrite<br/>(rename 已接入; move 尚无备份, 见 full-audit N4)"]
     BK --> Op["FileOperations.Rename / Move<br/>(move 先 GuardUnderRoots<br/>目标必须在库根内)"]
-    Op --> RS["Rescan()"]
-    RS --> Migrate["SetUserData(newId, 快照)<br/>Id 随路径变化, 迁移用户数据"]
-    Migrate --> OK["{ok, id: newId}"]
+    Op --> RS["RemoveItem(旧路径)<br/>+ UpsertItem(新路径)<br/>+ SetUserData 迁移收藏/标签"]
+    RS --> OK["{ok, id: newId}"]
 ```
 
 ## 9. 三逻辑库选项卡数据流（v0.4.2）
@@ -231,17 +236,18 @@ graph TD
         SLNX["TavernVault.slnx"]
         SRC["src/"] --> CORE["TavernVault.Core/"]
         SRC --> APP["TavernVault.App/<br/>bin/Release/net10.0-windows/<br/>TavernVault.exe + wwwroot"]
-        TESTS["tests/"] --> UNIT["TavernVault.Core.Tests/ (36项)"]
-        TESTS --> SMOKE["smoke_api.py (49项)"]
+        TESTS["tests/"] --> UNIT["TavernVault.Core.Tests/<br/>(数量以 dotnet test 输出为准)"]
+        TESTS --> SMOKE["smoke_api.py<br/>(同数据目录可重复运行)"]
         DOCS["docs/ (本文档套件)"]
     end
 
-    subgraph UserData["%APPDATA%\TavernVault (数据目录)"]
-        SETTINGS["settings.json"]
-        INDEX["index.json (version=3)"]
-        BACKUPS["backups/ (可自定义位置)<br/>└ manifest.json + 各文件子目录"]
+    subgraph UserData["数据目录 (默认 %APPDATA%\TavernVault, --data 可覆盖)"]
+        SETTINGS["settings.json<br/>(损坏时坏文件留档 .corrupt-*)"]
+        INDEX["index.json (version=3)<br/>+ index.bak 上一版留档"]
+        BACKUPS["backups/ (可自定义位置)<br/>manifest.json 原子写"]
         THUMBS["thumbs/ 缩略图缓存(可删,自动重建)"]
-        URL["server-url.txt (仅 --server)"]
+        LOGS["logs/ 按日滚动, 保留 7 天"]
+        URL["server-connection.json<br/>(仅 --server: {url, token})"]
     end
 
     subgraph Libraries["库根 (用户资源, 只读扫描+用户主动写)"]
@@ -268,6 +274,7 @@ timeline
     v0.4.2 : 三逻辑库选项卡 : 每库独立分类+二级子目录 : 来源过滤+冷升级自愈
     v0.4.3 : 侧栏手风琴+滚动隔离(含弹窗滚动修复) : 探测去硬编码(可移植性起步)
     v0.5.0 : 深度优化：PNG另存为损坏修复+会话令牌/Host校验 : 备份告警+滚动日志+原子写 : 增量更新+并发409+单实例
+    v0.5.1 : 安全加固：预设可视化XSS修复+junction/路径逃逸封堵 : 设置损坏防护+index.bak+还原自逐出修复 : 冒烟同目录可重复
 ```
 
 ## 12. 风险与防护措施对照

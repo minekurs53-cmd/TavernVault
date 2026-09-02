@@ -30,12 +30,23 @@ public sealed class SettingsStore
     {
         try
         {
-            if (File.Exists(SettingsPath))
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath), JsonOpts) ?? new AppSettings();
+            if (!File.Exists(SettingsPath)) return new AppSettings();
+            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath), JsonOpts) ?? new AppSettings();
         }
-        catch (Exception ex) when (ex is JsonException or IOException) { }
-        return new AppSettings();
+        catch (Exception ex) when (ex is JsonException or IOException)
+        {
+            // 文件存在但损坏/被锁：把坏文件改名留作证据，按默认设置继续。
+            // Vault 据此（SettingsWarning + 空库根）跳过启动期自愈重扫，
+            // 否则空库根会让自愈把 index.json 重写为空、丢光收藏与标签（v0.5.1）。
+            try { File.Move(SettingsPath, SettingsPath + $".corrupt-{DateTime.Now:yyyyMMdd-HHmmss}"); }
+            catch (IOException) { }
+            LoadSettingsWarning = "settings.json 无法读取（坏文件已保留为 .corrupt-*），本次以默认设置启动：库根列表为空，请重新登记库目录";
+            return new AppSettings();
+        }
     }
+
+    /// <summary>LoadSettings 检测到设置文件损坏时的告警文本；正常为 null。</summary>
+    public string? LoadSettingsWarning { get; private set; }
 
     public void SaveSettings(AppSettings settings)
     {
@@ -67,6 +78,9 @@ public sealed class SettingsStore
 
     public void SaveIndex(IEnumerable<LibraryItem> items)
     {
+        // 上一版索引留档：任何把索引清空/写坏的事故都可从 index.bak 找回收藏与标签
+        try { if (File.Exists(IndexPath)) File.Copy(IndexPath, IndexPathBak, overwrite: true); }
+        catch (IOException) { }
         var tmp = IndexPath + ".tmp";
         var payload = new JsonObject
         {
@@ -77,4 +91,6 @@ public sealed class SettingsStore
         File.WriteAllText(tmp, payload.ToJsonString(JsonOpts));
         File.Move(tmp, IndexPath, overwrite: true);
     }
+
+    private string IndexPathBak => Path.Combine(DataDir, "index.bak");
 }

@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-01 · 对应 v0.5.0
+> 最后更新：2026-09-02 · 对应 v0.5.1
 
 ## 一分钟了解
 
@@ -9,7 +9,9 @@
 - 管理酒馆资源（角色卡/世界书/预设/美化/脚本），写操作 = 备份 → 写盘 → 增量更新索引
 - 所有 JSON 编辑走 `JsonNode` 无损路径，未知字段永不丢失
 - **API 有会话令牌 + Host 白名单**：无令牌请求 401、伪造 Host 403（v0.5.0）
+- **下载的卡/预设是不可信内容**（v0.5.1）：前端插值全转义、内容字段参与文件名前必清洗、扫描跳过 junction——内容不能变成脚本、路径或越界索引
 - 酒馆来源文件有护栏：默认禁改名/移动（403），写前强制备份；**备份失败显性告警不静默**
+- 设置/索引/备份 manifest 全部原子写；settings.json 损坏时保留坏文件 + `index.bak` 兜底，**不再可能被启动自愈清空**
 
 ## 常用命令
 
@@ -25,6 +27,7 @@ dotnet build TavernVault.slnx -c Release
 # 测试
 dotnet test TavernVault.slnx -c Release    # 单元测试（数量以输出为准）
 # 冒烟：先启动 --server（连接信息写入 <data>/server-connection.json），脚本自动读取
+# 同一数据目录可连续多轮运行（v0.5.1 起自动清理上轮残留并保证全绿）
 ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe --server --port=47999 --data=testdata-server &
 PYTHONIOENCODING=utf-8 python tests/smoke_api.py
 
@@ -142,9 +145,11 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 | 仓库/Release 目录体积莫名增长 | WebView2 浏览器缓存 `bin/.../TavernVault.exe.WebView2\`（窗口模式每次运行都会增长，曾积累到 69M）。可整体删除，重开自动重建；`--server` 模式不产生 |
 | git push 连不上 github | 代理 (端口) 未启动；仓库已配 `http.proxy` |
 | 页面能打开但请求全 401 | 外部浏览器没有令牌（预期）——UI 只能经 WebView2 外壳使用；脚本用 `server-connection.json` 里的 token |
-| 保存返回 409「文件已被外部修改」 | 文件在外部被改动或另一窗口已保存；重新打开该条目再保存（会重扫索引） |
-| 启动提示「已在运行」 | 单实例 Mutex 防护（v0.5.0）：同一数据目录只允许一个实例 |
-| 备份目录不可用/磁盘满 | 保存会继续但响应带 `warnings`，界面弹错误色提示，日志落 `logs/tavernvault-*.log`——检查备份位置 |
+| 保存返回 409「文件已被外部修改」 | 文件在外部被改动或另一窗口已保存。**先点「重新扫描」再重新打开该条目**（409 后前端暂不自动重扫，见 full-audit N5）；连续两次保存第二枪报 409 属预期（第一次已改 mtime） |
+| 启动提示「已在运行」 | 单实例 Mutex 防护：**同一数据目录**只允许一个实例（v0.5.1 起按数据目录隔离，窗口模式 + `--server` 冒烟可并存） |
+| 备份目录不可用/磁盘满/被删除 | 保存会继续但响应带 `warnings`，界面弹错误色提示，日志落 `logs/tavernvault-*.log`；目录被删后下次备份自动重建（v0.5.1）——检查备份位置 |
+| 启动后库全空但资源还在 | settings.json 损坏被重置（坏文件已保留为 `settings.json.corrupt-*`，日志与 `/api/meta.settingsWarning` 有告警）：重新登记库目录后重扫即可找回收藏/标签（索引有 `index.bak` 留档） |
+| 库里出现 `xxx.png.tmp-xxxx` 之类残片 | 旧版残留（v0.5.1 起扫描已过滤 `.tmp` 前缀且写失败自动清理），手动删除即可 |
 | 酒馆源文件改名被拒 (403) | 预期护栏；确认风险后请求体加 `force:true` |
 | 旧索引缺新字段 | 版本门控没触发？确认 `IndexVersion` 已 +1 |
 | 修改后收藏/标签丢失 | 检查重命名/移动路径是否调了 `GetUserData`→`SetUserData` 迁移 |

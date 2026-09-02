@@ -109,4 +109,74 @@ public class ScannerAndFileOpsTests : IDisposable
             LibraryScanner.ComputeId(@"D:\Foo\Bar.json".ToUpperInvariant()),
             LibraryScanner.ComputeId(@"d:\foo\bar.json"));
     }
+
+    [Fact]
+    public void Scan_Skips_ReparsePoint_Dirs()
+    {
+        // junction 指向库外目录：其中的文件不得进入索引（否则库外文件可被应用改删，圣域被击穿）
+        var outside = Path.Combine(_dir, "outside-sensitive");
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "外部.json"), LorebookJson());
+
+        var library = Path.Combine(_dir, "库内");
+        Directory.CreateDirectory(library);
+        File.WriteAllText(Path.Combine(library, "正常.json"), LorebookJson());
+        var link = Path.Combine(library, "链接");
+        var psi = new System.Diagnostics.ProcessStartInfo("cmd", $"/c mklink /J \"{link}\" \"{outside}\"")
+        { CreateNoWindow = true, RedirectStandardError = true, UseShellExecute = false };
+        using var p = System.Diagnostics.Process.Start(psi);
+        p!.WaitForExit(5000);
+        if (p.ExitCode != 0) return; // 环境不允许创建 junction 时跳过断言
+
+        var vault = new Vault(new SettingsStore(_dir + "-data"));
+        vault.AddRoot(library);
+        vault.Rescan();
+
+        Assert.Single(vault.Items); // 只有"正常.json"
+        Assert.DoesNotContain(vault.Items, i => i.FileName == "外部.json");
+    }
+
+    [Fact]
+    public void Scan_Cleans_Card_Title()
+    {
+        // Title 会派生导出文件名，必须清洗控制符并限长（v0.5.1）
+        var name = "第一行\n第二行" + new string('名', 300);
+        Write("标题卡.json", new JsonObject
+        {
+            ["spec"] = "chara_card_v2",
+            ["data"] = new JsonObject { ["name"] = name, ["description"] = "d" },
+        }.ToJsonString());
+
+        var vault = new Vault(new SettingsStore(_dir + "-data"));
+        vault.AddRoot(_dir);
+        vault.Rescan();
+
+        var item = vault.Items.Single();
+        Assert.True(item.Title!.Length <= 201); // 200 字符 + 省略号
+        Assert.DoesNotContain('\n', item.Title);
+    }
+
+    [Fact]
+    public void CorruptSettings_Preserves_Index_And_Warns()
+    {
+        // P1-1 回归：settings.json 损坏时不得让启动期自愈把 index.json 清空（收藏/标签会永久丢失）
+        var data = _dir + "-data3";
+        var store = new SettingsStore(data);
+        var vault = new Vault(store);
+        var root = Path.Combine(_dir, "根");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "书.json"), LorebookJson());
+        vault.AddRoot(root);
+        vault.Rescan();
+        var id = vault.Items.Single().Id;
+        vault.SetFavorite(id, true);
+        File.WriteAllText(Path.Combine(store.DataDir, "settings.json"), "{corrupt!!");
+
+        var again = new Vault(new SettingsStore(data)); // 模拟重启
+        Assert.NotNull(again.SettingsWarning);
+        Assert.Empty(again.Settings.LibraryRoots);
+        Assert.True(again.Items.Single().Favorite); // 索引未被"自愈"覆盖
+        Assert.True(File.Exists(Directory.GetFiles(store.DataDir, "settings.json.corrupt-*").Single()));
+        Assert.True(File.Exists(Path.Combine(store.DataDir, "index.bak"))); // 索引留档可用
+    }
 }

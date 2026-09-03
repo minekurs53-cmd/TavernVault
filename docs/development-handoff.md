@@ -217,6 +217,22 @@ v0.5.2 依据 `docs/full-audit-v0.5.0.md` 路线图完成备份可靠性、编�
 - **App 加固（P2）**：9 个未包裹端点收编 Handle/HandleAsync（异常不再无日志 500）；catch 补 OperationCanceledException；三处裸 catch 改"通用文案 + 完整细节进日志"（不再外泄绝对路径）；Kestrel 请求体上限显式化 21MB；move 越权等不变。WebView2：用户数据目录移至 `%LOCALAPPDATA%\TavernVault\WebView2`（bin 不再被撑大）、NewWindowRequested 仅放行 http/https、NavigationStarting 拦截非本机导航（令牌不再可能注入外部页面）。AppLog 跨天触发一次清理。前端杂项：refreshItems 请求序号防乱序、401 专属提示、tv-view 白名单、boot 失败隐藏 loading、removeRoot 失败 toast。
 - **测试补齐（A2/A4/A5/A6/A9）**：新增 `TavernGuardTests`（酒馆源强制备份、TT 保留 10 份、TavernDetector 环境变量探测、RelocateTo 两阶段成败、Load 幽灵告警）；冒烟新增"酒馆护栏"（403/force/强制备份/settings 负向，夹具放 `.smoke/酒馆源` 避免与外层 normal 根嵌套抢注）与"错误合同"两段；删除空壳 Unit1 测试。
 
+### 3.13 格式识别与酒馆官方对照（v0.5.2 核查）
+
+对照官方用户数据目录（characters / worlds / OpenAI Settings / TextGeneration Settings / themes / regex / instruct / context / sysprompt / QuickReplies / avatars / backgrounds）逐类核查 `TypeDetector` 与编辑端点。**结论：主干一致，存在三类差异**，已列入 §11 队列（v0.6）：
+
+| 类别 | 官方格式/行为 | TavernVault 现状 | 结论 |
+|---|---|---|---|
+| 角色卡 | PNG tEXt chara/ccv3；JSON V1/V2/V3 | 一致（内嵌书保形合并） | ✔ |
+| 世界书（worlds/） | `entries` 对象（uid 键）、ST 内部格式 | 一致 | ✔ |
+| 独立 Spec-V2 世界书 / NovelAI 导出 | `entries` 可为数组；条目 `keys/enabled` | 能识别为 lorebook，但 `GET /api/lore` 仅接受对象（数组返回 400），`PUT` 会把数组容器改写为对象 | **容器不保形**——违反本仓库自订"数组/对象不可互换"约定 |
+| 对话预设（OpenAI Settings/） | `prompts` + `prompt_order` | 一致 | ✔ |
+| 文本补全预设（TextGeneration Settings/） | 采样参数 JSON（无 prompts） | 未识别 → 落"文本" | 缺类型 |
+| 美化主题（themes/） | `main_text_color`、**`italics_text_color`**、**`quote_text_color`**、`blur_tint_color`、`shadow_color`… | 可识别（其余键命中），但 ThemeKeys 含官方不存在的字段名 `italics_color`/`quote_color`；`bogus_folders` 归属待核 | 字段清单需对齐 |
+| 正则（regex/） | `scriptName` + `findRegex` | 一致 | ✔ |
+| instruct / context / sysprompt 模板、QuickReplies | 各自专用 JSON 结构 | 未识别 → 落"文本" | 缺类型 |
+| 头像 / 背景 / 音效等资产 | 图片/音频 | → "其他" | 设计如此（低优先） |
+
 ---
 
 ## 4. REST API 参考
@@ -395,6 +411,8 @@ dotnet build TavernVault.slnx -c Release
 2. **前端安全网 + 拆分**：editor.js 先落 UI 自动化冒烟再拆 god-file；编辑器 dirty/saveFn 会话化（消除跨会话窄窗竞态，full-audit P1-7 深修项）。
 3. **备份健康度**：设置弹窗显示上次成功备份时间与备份目录可写性探测。
 4. **发布/分发文档**：打包方式、WebView2 前置、升级数据迁移（full-audit §5 遗留）。
+5. **格式识别对齐酒馆官方**（对照表见 §3.13）：ThemeKeys 字段修正（`italics_text_color`/`quote_text_color`，核查 `bogus_folders` 归属）；独立世界书容器保形（`GET/PUT /api/lore` 支持 entries 数组与 Spec-V2 条目，行为对齐 `CharacterBook` 的保形策略）；新增类型识别：文本补全预设（TextGeneration Settings）、instruct/context/sysprompt 模板、QuickReplies、NovelAI 导出条目；`TavernDetector.Subdirs` 接入清单同步扩充。配检测夹具单测与冒烟。
+6. **新建文件**：各分类支持一键新建空白模板——角色卡（V2/V3 骨架）、世界书（ST 格式空 entries）、预设（prompts+prompt_order 骨架）、美化（官方字段骨架）、正则/脚本（骨架）；入口为分类空态引导 + 工具栏「新建」；写入当前普通库根，重名自动加序号（复用 `GetSaveAsPath` 语义），创建后直接进入对应编辑器。
 
 ### 中远期方向（v0.6+）
 

@@ -29,11 +29,11 @@ public class BackupAndSaveAsTests : IDisposable
         var store = new BackupStore(_dir + "-store") { MaxPerFile = 5 };
         var file = WriteFile("书.json", "{\"v\":1}");
 
-        var b1 = store.BackupBeforeWrite(file);
+        var b1 = store.BackupBeforeWrite(file, out _);
         Assert.NotNull(b1);
 
         File.WriteAllText(file, "{\"v\":2}"); // 模拟编辑
-        var restored = store.Restore(b1!.Id);
+        var restored = store.Restore(b1!.Id, out _);
         Assert.Equal(file, restored);
         Assert.Equal("{\"v\":1}", File.ReadAllText(file));
 
@@ -49,7 +49,7 @@ public class BackupAndSaveAsTests : IDisposable
 
         for (int i = 0; i < 6; i++)
         {
-            store.BackupBeforeWrite(file);
+            store.BackupBeforeWrite(file, out _);
             Thread.Sleep(15); // 时间戳可区分
             File.WriteAllText(file, "v" + i);
         }
@@ -68,13 +68,13 @@ public class BackupAndSaveAsTests : IDisposable
         var ids = new List<string>();
         for (int i = 0; i < 4; i++)
         {
-            ids.Add(store.BackupBeforeWrite(file)!.Id);
+            ids.Add(store.BackupBeforeWrite(file, out _)!.Id);
             File.WriteAllText(file, "v" + (i + 1));
             Thread.Sleep(15);
         }
         Assert.Equal(3, store.List(file).Count); // v0 已被轮转删除，最旧留存 = v1
 
-        var restored = store.Restore(ids[1]);
+        var restored = store.Restore(ids[1], out _);
         Assert.Equal(file, restored);
         Assert.Equal("v1", File.ReadAllText(file));
         Assert.Equal(3, store.List(file).Count); // 还原动作自身产生的安全备份同样受轮转约束
@@ -104,7 +104,7 @@ public class BackupAndSaveAsTests : IDisposable
         var newDir = Path.Combine(_dir, "backups-elsewhere");
         var file = WriteFile("迁.json", "a");
 
-        var b = store.BackupBeforeWrite(file);
+        var b = store.BackupBeforeWrite(file, out _);
         Assert.NotNull(b);
         Assert.True(Directory.GetFiles(oldDir).Length >= 2); // manifest + 备份文件
 
@@ -144,12 +144,12 @@ public class BackupAndSaveAsTests : IDisposable
     {
         var store = new BackupStore(_dir + "-store");
         var file = WriteFile("a.json", "data");
-        var b = store.BackupBeforeWrite(file)!;
+        var b = store.BackupBeforeWrite(file, out _)!;
 
         Assert.True(store.Delete(b.Id));
         Assert.False(store.Delete(b.Id));          // 已删
-        Assert.Null(store.BackupBeforeWrite(Path.Combine(_dir, "不存在.json"))); // 原文件缺失 → null
-        Assert.Null(store.Restore("deadbeef"));    // 未知 id
+        Assert.Null(store.BackupBeforeWrite(Path.Combine(_dir, "不存在.json"), out _)); // 原文件缺失 → null
+        Assert.Null(store.Restore("deadbeef", out _));    // 未知 id
     }
 
     [Fact]

@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-02 · 对应 v0.5.2
+> 最后更新：2026-09-03 · 对应 v0.5.3
 
 ## 一分钟了解
 

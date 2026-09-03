@@ -51,15 +51,13 @@ public partial class App : Application
 
             if (e.Args.Contains("--server"))
             {
-                // 无窗口模式（WinExe 无控制台）：连接信息落盘，便于脚本读取
-                Console.WriteLine($"TavernVault listening at {url}");
+                // 无窗口模式（WinExe 无控制台，Console 不可见）：连接信息落盘，便于脚本读取
                 try
                 {
                     var connPath = Path.Combine(handle.DataDir, "server-connection.json");
                     File.WriteAllText(connPath, JsonSerializer.Serialize(
                         new { url, token = handle.Token },
                         new JsonSerializerOptions { WriteIndented = true }));
-                    Console.WriteLine($"Connection file: {connPath}");
                 }
                 catch (IOException) { }
             }

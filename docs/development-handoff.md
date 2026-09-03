@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.5.2** · 最后更新：2026-09-02
+> 当前版本：**v0.5.3（工作区，待提交）** · 最后更新：2026-09-03
 
 ---
 
@@ -184,7 +184,7 @@ v0.4.3 解决两个体验问题：侧栏三级导航（分类/子目录/我的�
 
 ### 3.10 深度优化（v0.5.0）
 
-v0.5.0 依据 `docs/architecture-review.md`（独立架构评审）完成五项修复，全部围绕"验证与安全边界补到与设计同等高度"：
+v0.5.0 依据第一轮独立架构评审完成五项修复，全部围绕"验证与安全边界补到与设计同等高度"：
 
 - **PNG 另存为数据损坏修复（评审 2.1）**：旧版 `/api/cards/{id}/saveas` 对 PNG 卡片先 `File.Copy` 原图、再用 JSON 文本覆盖、再走 `WriteTexts`——中间那次 `WriteAllTextAsync` 把 PNG 字节流截断成 JSON，产物丢失 IHDR/IDAT/IEND 但签名合法、卡片可读，**静默产出无图像坏卡**。修复 = 删除多余写入，PNG 分支只保留 复制原图 + `CharacterCardFile.Save`（只重嵌 chara/ccv3）。冒烟新增真实 PNG 夹具断言副本含 IDAT 且字节一致，单测新增 `CharacterCardFile_Save_Png_PreservesImageChunks`。
 - **本地 API 会话令牌 + Host 白名单（评审 2.2）**：管道最外层中间件校验 `Host ∈ {127.0.0.1, localhost, ::1}`（403 防 DNS rebinding）；`/api/*` 必须携带启动随机生成的令牌——`X-TV-Token` 头或 `?token=` query（img 标签无法带自定义头，两通道保密性等价），不匹配 401（恒定时间比较 `CryptographicOperations.FixedTimeEquals`）。令牌分发：窗口模式 WebView2 `AddScriptToExecuteOnDocumentCreatedAsync` 注入（先于任何页面脚本，对后续导航同样生效）；`--server` 模式写数据目录 `server-connection.json`（url + token，替代旧 server-url.txt）。威胁模型见 README「安全模型」。
@@ -217,7 +217,12 @@ v0.5.2 依据 `docs/full-audit-v0.5.0.md` 路线图完成备份可靠性、编�
 - **App 加固（P2）**：9 个未包裹端点收编 Handle/HandleAsync（异常不再无日志 500）；catch 补 OperationCanceledException；三处裸 catch 改"通用文案 + 完整细节进日志"（不再外泄绝对路径）；Kestrel 请求体上限显式化 21MB；move 越权等不变。WebView2：用户数据目录移至 `%LOCALAPPDATA%\TavernVault\WebView2`（bin 不再被撑大）、NewWindowRequested 仅放行 http/https、NavigationStarting 拦截非本机导航（令牌不再可能注入外部页面）。AppLog 跨天触发一次清理。前端杂项：refreshItems 请求序号防乱序、401 专属提示、tv-view 白名单、boot 失败隐藏 loading、removeRoot 失败 toast。
 - **测试补齐（A2/A4/A5/A6/A9）**：新增 `TavernGuardTests`（酒馆源强制备份、TT 保留 10 份、TavernDetector 环境变量探测、RelocateTo 两阶段成败、Load 幽灵告警）；冒烟新增"酒馆护栏"（403/force/强制备份/settings 负向，夹具放 `.smoke/酒馆源` 避免与外层 normal 根嵌套抢注）与"错误合同"两段；删除空壳 Unit1 测试。
 
-### 3.13 格式识别与酒馆官方对照（v0.5.2 核查）
+### 3.13 v0.5.x 收尾（v0.5.3）
+
+- **UI 清单实跑通过**（外部浏览器 + `?token=` 通道，index.html 内置令牌回退）：主界面/网格/缩略图、预设可视化 + Tab 往返、角色卡表单↔JSON 互切重建（P1-7）、Esc 确认框不重入（P1-10）、放弃修改、保存双视图互刷（P1-8）、世界书搜索不标脏、409 双 toast 自动重扫（N5）、另存为自动关闭、搜索/视图/重扫——12 项全过、0 JS 错误。过程中抓到并修复 index.html 内联脚本语法错误（探针失效即它的症状）。
+- **奥卡姆剃刀修剪**（grep 逐项核实无调用方后删除）：`BackupStore.BackupBeforeWrite/Restore` 两个旧签名重载、`PngChunkIO.WriteText` 单键包装（调用方统一走 `WriteTexts`）、`util.js` 的 `debounce`（零引用）、`App.xaml.cs` 两处不可见的 `Console.WriteLine`（WinExe 无控制台）、两份已被本文件与 full-audit 取代的早期评审文档（git 历史可查）。`Vault.AddRoot(string)` 与 `ApiServerHandle` 经核实生产在用，保留。
+
+### 3.14 格式识别与酒馆官方对照（v0.5.2 核查）
 
 对照官方用户数据目录（characters / worlds / OpenAI Settings / TextGeneration Settings / themes / regex / instruct / context / sysprompt / QuickReplies / avatars / backgrounds）逐类核查 `TypeDetector` 与编辑端点。**结论：主干一致，存在三类差异**，已列入 §11 队列（v0.6）：
 
@@ -350,7 +355,7 @@ dotnet build TavernVault.slnx -c Release
 |---|---|---|
 | 单元测试 | `dotnet test TavernVault.slnx -c Release` | **数量以输出为准**。覆盖：PNG 块、内嵌书映射、备份/另存为/自定义备份位置、备份失败告警、UpsertItem 用户数据保留、PNG 保存图像块保留、增量扫描、用户数据迁移、来源过滤与 BuildLibraries 聚合（含冷升级自愈） |
 | API 冒烟 | `python tests/smoke_api.py` | **数量以输出为准**。夹具自足（自建 testdata 并注册、自清理上轮残留含 backups/thumbs）；连接信息自动读 `<data>/server-connection.json`（TV_CONN/TV_BASE/TV_TOKEN 可覆写）；先 `--server --port=47999 --data=<临时目录>` 再跑；**写操作只作用于 testdata**；**同一数据目录可连续多轮运行全绿**（v0.5.1 起）。含 PNG 完整性回归、满上限还原回归、导出路径逃逸回归、409 并发防护、401/403 安全负向用例 |
-| UI 冒烟 | 浏览器自动化打开服务 URL | 页面加载失败时读 `window.__errs`（index.html 内置探针）；截图存 `ui-shots/`（已 gitignore） |
+| UI 冒烟 | 浏览器打开 `http://127.0.0.1:47999/?token=<连接文件里的token>`（v0.5.3 起支持 query 回退） | 页面加载失败时读 `window.__errs`（index.html 内置探针）；截图存 `ui-shots/`（已 gitignore） |
 | 真实库验证 | `GET` 任意端点 | 只读核对可以，**绝不对真实库 PUT/POST** |
 
 单元测试文件：CharacterBookTests、CardAndDetectionTests、VaultQueryTests、BackupAndSaveAsTests、PngChunkIOTests、ScannerAndFileOpsTests、UnitTest1（数量随版本增长，以命令输出为准）。
@@ -371,8 +376,9 @@ dotnet build TavernVault.slnx -c Release
 | v0.4.1 | **多库管理 + 备份位置** | 侧栏"库"分组选项卡（按库根浏览）；备份位置自定义（`BackupRootPath` + `RelocateTo` 整体迁移 + 绝对路径校验）；项目文档体系升级；单元测试 34→36 |
 | v0.4.2 | **三逻辑库选项卡** | 侧栏重构为三个独立逻辑库（局外存储/SillyTavern/TauriTavern，来源并集）；每库独立类型计数 + 二级子目录导航（酒馆库按功能分区根）；`Vault.BuildLibraries` 聚合 + `QueryParams.Source` 过滤（非法 source 400）；移动弹窗按来源分组；构造时来源漂移自愈；单测 36→41、冒烟 49→61（**夹具自足**） |
 | v0.4.3 | **手风琴 + 滚动隔离 + 可移植性** | 侧栏分类/子目录/标签三分区手风琴（单开互斥、0fr→1fr 平滑过渡、空分区置灰）；整窗滚动 bug 修复（html/body overflow:hidden，滚动收敛到侧栏与内容区内部，flex min-height:0 链）；`TavernDetector`/`EnsureDefaultRoot` 去硬编码（环境变量 + %USERPROFILE% 约定探测）；全仓库文档脱敏（零机器特定路径）；冒烟脚本路径改用 `TESTDATA` 变量；**fix-1** 修复弹窗超高无法滚动（`.modal` max-height + overflow-y）、版本号改四段式显示 `vX.Y.Z fix-N`、确立版本号规范（见 quick-reference） |
-| v0.5.0 | **深度优化（依据 docs/architecture-review.md）** | 修复 PNG 另存为静默数据损坏（删多余 WriteAllTextAsync + PNG 夹具回归）；本地 API 会话令牌（X-TV-Token / ?token=，恒定时间比对）+ Host 白名单 + server-connection.json；备份失败显性告警（warnings 外显 + UI toast）+ AppLog 滚动日志；写路径增量更新（`_byId` 字典 + `UpsertItem`/`RemoveItem` 替换 11 处全量 Rescan，**UpsertItem 回填收藏/标签**）+ SaveSettings 原子写；编辑并发防护（expectedModified→409）+ 单实例 Mutex；文档数字收敛（测试数/版本号单一事实源） |
+| v0.5.0 | **深度优化（依据第一轮独立架构评审）** | 修复 PNG 另存为静默数据损坏（删多余 WriteAllTextAsync + PNG 夹具回归）；本地 API 会话令牌（X-TV-Token / ?token=，恒定时间比对）+ Host 白名单 + server-connection.json；备份失败显性告警（warnings 外显 + UI toast）+ AppLog 滚动日志；写路径增量更新（`_byId` 字典 + `UpsertItem`/`RemoveItem` 替换 11 处全量 Rescan，**UpsertItem 回填收藏/标签**）+ SaveSettings 原子写；编辑并发防护（expectedModified→409）+ 单实例 Mutex；文档数字收敛（测试数/版本号单一事实源） |
 | v0.5.1 | **安全与可靠性加固（依据 docs/full-audit-v0.5.0.md）** | 详见 §3.11。P0：预设可视化 XSS（role 未转义）。P1：扫描跳过 junction、内嵌书导出文件名清洗、settings.json 损坏防护（+index.bak）、还原满上限自逐出（原子写回）、缩略图随数据目录。N1/N2/N3 既有项收尾；冒烟同目录可重复成为验收标准 |
+| v0.5.3 | **v0.5.x 收尾** | UI 清单实跑 12 项全过（index.html 加 `?token=` 回退供外部浏览器冒烟；顺带修复内联脚本语法错误）；奥卡姆剃刀修剪无用代码（2 个旧重载、WriteText 包装、debounce、Console.WriteLine、2 份被取代的评审文档） |
 | v0.5.2 | **可靠性收尾 + 编辑器重构 + 测试补齐（full-audit §8 路线）** | 详见 §3.12。备份：Load 保留幽灵记录 + LoadWarning、RelocateTo 两阶段迁移；move 补写前备份（N4）；编辑器：Tab AbortController + 保存双视图互刷 + Esc 栈顶让位（两条静默数据丢失链切断）+ 409 自动重扫（N5）；App：9 端点异常收编、请求体上限 21MB、WebView2 UDF 搬家 + 导航拦截；测试：TavernGuardTests 6 项 + 冒烟酒馆护栏/错误合同两段，删除 Unit1 空壳 |
 
 ### 9.2 当前状态（截至 2026-09-02）
@@ -403,7 +409,7 @@ dotnet build TavernVault.slnx -c Release
 
 ### 未完成（当前收尾项）
 
-- [ ] 浏览器 UI 清单跑一轮（编辑器重构面大：表单/JSON 互切、保存互刷、Esc、409 恢复、另存为关闭语义、预设可视化）
+- [x] 浏览器 UI 清单跑一轮（v0.5.3 完成，12 项全过，见 §3.13）
 
 ### 近期方向（v0.6，依据 full-audit §8 路线图）
 
@@ -438,4 +444,4 @@ dotnet build TavernVault.slnx -c Release
 
 ---
 
-**文档版本**：3.2 · **最后更新**：2026-09-02 · 对应程序版本 v0.5.2
+**文档版本**：3.3 · **最后更新**：2026-09-03 · 对应程序版本 v0.5.3

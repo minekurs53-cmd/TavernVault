@@ -1,7 +1,7 @@
 # TavernVault 架构与流程可视化
 
 > 配套 `docs/development-handoff.md` §2-§3 的图集。所有图为 Mermaid 源码，可在 GitHub / VS Code（Mermaid 插件）直接渲染。
-> 最后更新：2026-09-02 · 对应 v0.5.1
+> 最后更新：2026-09-02 · 对应 v0.5.2
 
 ## 1. 系统分层架构
 
@@ -206,7 +206,7 @@ flowchart TD
     Guard -->|"是(酒馆源)"--> Force{"请求带 force:true ?"}
     Force -->|"否"| R403["403: 酒馆聊天按文件名/路径<br/>引用角色卡, 拒绝"]
     Force -->|"是"| Confirm["前端已弹风险确认框"] --> Snap
-    Snap --> BK["BackupBeforeWrite<br/>(rename 已接入; move 尚无备份, 见 full-audit N4)"]
+    Snap --> BK["BackupBeforeWrite<br/>(rename/move 均已接入, v0.5.2 起 move 也备份)"]
     BK --> Op["FileOperations.Rename / Move<br/>(move 先 GuardUnderRoots<br/>目标必须在库根内)"]
     Op --> RS["RemoveItem(旧路径)<br/>+ UpsertItem(新路径)<br/>+ SetUserData 迁移收藏/标签"]
     RS --> OK["{ok, id: newId}"]
@@ -275,6 +275,7 @@ timeline
     v0.4.3 : 侧栏手风琴+滚动隔离(含弹窗滚动修复) : 探测去硬编码(可移植性起步)
     v0.5.0 : 深度优化：PNG另存为损坏修复+会话令牌/Host校验 : 备份告警+滚动日志+原子写 : 增量更新+并发409+单实例
     v0.5.1 : 安全加固：预设可视化XSS修复+junction/路径逃逸封堵 : 设置损坏防护+index.bak+还原自逐出修复 : 冒烟同目录可重复
+    v0.5.2 : 备份Load不丢记录+RelocateTo两阶段 : 编辑器重构(互刷/Esc/409自动重扫)+move备份 : 酒馆护栏测试+错误合同补齐
 ```
 
 ## 12. 风险与防护措施对照

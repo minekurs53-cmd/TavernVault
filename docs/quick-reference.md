@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-02 · 对应 v0.5.1
+> 最后更新：2026-09-02 · 对应 v0.5.2
 
 ## 一分钟了解
 
@@ -145,7 +145,7 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 | 仓库/Release 目录体积莫名增长 | WebView2 浏览器缓存 `bin/.../TavernVault.exe.WebView2\`（窗口模式每次运行都会增长，曾积累到 69M）。可整体删除，重开自动重建；`--server` 模式不产生 |
 | git push 连不上 github | 代理 7897 未启动；仓库已配 `http.proxy` |
 | 页面能打开但请求全 401 | 外部浏览器没有令牌（预期）——UI 只能经 WebView2 外壳使用；脚本用 `server-connection.json` 里的 token |
-| 保存返回 409「文件已被外部修改」 | 文件在外部被改动或另一窗口已保存。**先点「重新扫描」再重新打开该条目**（409 后前端暂不自动重扫，见 full-audit N5）；连续两次保存第二枪报 409 属预期（第一次已改 mtime） |
+| 保存返回 409「文件已被外部修改」 | 文件在外部被改动或另一窗口已保存。**v0.5.2 起前端会自动重扫索引**并提示重新打开该条目；连续两次保存第二枪报 409 属预期（第一次已改 mtime） |
 | 启动提示「已在运行」 | 单实例 Mutex 防护：**同一数据目录**只允许一个实例（v0.5.1 起按数据目录隔离，窗口模式 + `--server` 冒烟可并存） |
 | 备份目录不可用/磁盘满/被删除 | 保存会继续但响应带 `warnings`，界面弹错误色提示，日志落 `logs/tavernvault-*.log`；目录被删后下次备份自动重建（v0.5.1）——检查备份位置 |
 | 启动后库全空但资源还在 | settings.json 损坏被重置（坏文件已保留为 `settings.json.corrupt-*`，日志与 `/api/meta.settingsWarning` 有告警）：重新登记库目录后重扫即可找回收藏/标签（索引有 `index.bak` 留档） |

@@ -10,6 +10,7 @@ namespace TavernVault.App.Hosting;
 public static class AppLog
 {
     private static string? _dir;
+    private static string? _lastDay; // v0.5.2 修复 P2-13：上次写入的日期（yyyyMMdd），跨天时补一次过期清理
     private static readonly object _lock = new();
 
     public static void Init(string dataDir)
@@ -41,9 +42,18 @@ public static class AppLog
         if (_dir is null) return;
         try
         {
-            var path = Path.Combine(_dir, $"tavernvault-{DateTime.Now:yyyyMMdd}.log");
-            var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}{Environment.NewLine}";
-            lock (_lock) File.AppendAllText(path, line);
+            var now = DateTime.Now;
+            var day = now.ToString("yyyyMMdd");
+            var path = Path.Combine(_dir, $"tavernvault-{day}.log");
+            var line = $"{now:yyyy-MM-dd HH:mm:ss} [{level}] {message}{Environment.NewLine}";
+            lock (_lock)
+            {
+                File.AppendAllText(path, line);
+                // v0.5.2：日期切换（应用跨天长驻）时触发一次过期日志清理——此前仅在启动时清理一次
+                var dayChanged = _lastDay is not null && _lastDay != day;
+                _lastDay = day;
+                if (dayChanged) PruneOld();
+            }
         }
         catch { /* 日志永不抛出 */ }
     }

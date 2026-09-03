@@ -71,6 +71,21 @@ def call_raw(method, path, headers=None):
         return ex.code, ex.headers.get("Content-Type") or ""
 
 
+def call_code(method, path, body=None):
+    """带令牌请求，只返回 HTTP 状态码（错误合同用例）。"""
+    req = urllib.request.Request(BASE + path, method=method)
+    req.add_header("X-TV-Token", TOKEN)
+    data = None
+    if body is not None:
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, data) as resp:
+            return resp.status
+    except urllib.error.HTTPError as ex:
+        return ex.code
+
+
 def check(name, cond, extra=""):
     global ok_count, fail_count
     if cond:
@@ -437,6 +452,129 @@ code, _ = call_raw("GET", "/api/meta", {"Host": "evil.example.com", "X-TV-Token"
 check("伪造 Host 被拒 403", code == 403, f"HTTP {code}")
 code, ctype = call_raw("GET", "/")
 check("静态文件无令牌可达", code == 200 and "text/html" in ctype, f"HTTP {code}")
+
+print("== 酒馆护栏（v0.5.2 回归）==")
+# 自建假酒馆根（tavernST）：不需要真实安装。段内自清理：条目进回收站 + 移除根 + 重扫。
+# 注意：酒馆根必须是独立目录，不能嵌在 TESTDATA 里——扫描器按路径去重且先扫到的根生效，
+# 嵌套路径会被外层 testdata（normal）抢注，rootSource 永远到不了 tavernST。
+# 放在 .smoke/（gitignore 内，testdata 的兄弟目录）：%TEMP% 常是 8.3 短路径（HUANGY~1），
+# 服务端 GetFullPath 会展开成长路径，路径回比就变了。
+TAVERN = os.path.abspath(os.path.join(".smoke", "酒馆源"))
+os.makedirs(TAVERN, exist_ok=True)
+with open(os.path.join(TAVERN, "酒馆卡.json"), "w", encoding="utf-8") as f:
+    json.dump({"spec": "chara_card_v2", "spec_version": "2.0",
+               "data": {"name": "酒馆卡", "description": "酒馆卡描述"}}, f, ensure_ascii=False)
+with open(os.path.join(TAVERN, "酒馆书.json"), "w", encoding="utf-8") as f:
+    json.dump({"entries": {"0": {"key": ["酒馆词"], "content": "酒馆内容", "comment": "酒馆条目",
+                                 "constant": False, "disable": False, "order": 1,
+                                 "position": 0, "depth": 4, "probability": 100}}}, f, ensure_ascii=False)
+r = call("POST", "/api/roots", {"path": TAVERN, "source": "tavernST"})
+check("注册 tavernST 根", (r or {}).get("ok") is True and any(
+    os.path.normcase(rr.get("path") or "") == os.path.normcase(TAVERN)
+    and rr.get("source") == "tavernST" for rr in r.get("roots") or []), str(r)[:80])
+tcard = call("GET", "/api/items?source=tavernST&q=" + urllib.parse.quote("酒馆卡"))
+tlore = call("GET", "/api/items?source=tavernST&kind=lorebook&q=" + urllib.parse.quote("酒馆书"))
+check("酒馆条目入索引且 rootSource=tavernST",
+      len(tcard) == 1 and len(tlore) == 1 and tcard[0]["rootSource"] == 1,
+      str([i["fileName"] for i in tcard + tlore]))
+tcard_id, tlore_id = tcard[0]["id"], tlore[0]["id"]
+
+r = call("POST", "/api/tavern/detect")
+found = (r or {}).get("found")
+check("detect 返回 found 列表", isinstance(found, list), f"{len(found or [])} 项")
+check("detect 每项含 source/label/subdirs",
+      all(isinstance(d, dict) and all(k in d for k in ("source", "label", "subdirs")) for d in found or []))
+
+code = call_code("POST", "/api/tavern/connect", {"source": "normal"})
+r = call("POST", "/api/tavern/connect", {"source": "normal"})
+check("connect 无效酒馆来源 400", code == 400 and (r or {}).get("error") == "无效的酒馆来源", f"HTTP {code}")
+
+code = call_code("POST", f"/api/items/{tcard_id}/rename", {"name": "酒馆卡改名"})
+check("rename 无 force 403", code == 403, f"HTTP {code}")
+r = call("POST", f"/api/items/{tcard_id}/rename", {"name": "酒馆卡改名", "force": True})
+check("rename 带 force 成功", (r or {}).get("ok") is True, str(r)[:60])
+tcard_id = r["id"]  # 重命名后 id 随路径变化
+
+code = call_code("POST", f"/api/items/{tlore_id}/move", {"root": TAVERN, "dir": ""})
+check("move 无 force 403", code == 403, f"HTTP {code}")
+
+# 强制备份：酒馆源无视 autoBackup 开关；普通源关闭后不备
+call("POST", "/api/settings/backup", {"autoBackup": False})
+bk_before = len(call("GET", f"/api/items/{tcard_id}/backups"))
+r = call("PUT", f"/api/cards/{tcard_id}", {"fields": {"description": "酒馆卡改描述"}})
+bk_after = call("GET", f"/api/items/{tcard_id}/backups")
+check("酒馆源无视开关仍备份", (r or {}).get("ok") is True and not (r or {}).get("warnings")
+      and len(bk_after) == bk_before + 1, f"{bk_before} → {len(bk_after)}")
+
+png_items = call("GET", "/api/items?kind=character&q=" + urllib.parse.quote("图像卡"))
+check("普通卡夹具就绪", len(png_items) == 1 and png_items[0]["fileName"] == "图像卡.png",
+      str([i["fileName"] for i in png_items]))
+png_id = png_items[0]["id"]
+png_bk_before = len(call("GET", f"/api/items/{png_id}/backups"))
+r = call("PUT", f"/api/cards/{png_id}", {"fields": {}})
+png_bk_after = call("GET", f"/api/items/{png_id}/backups")
+check("普通源关闭后不备份", (r or {}).get("ok") is True and len(png_bk_after) == png_bk_before,
+      f"{png_bk_before} → {len(png_bk_after)}")
+
+# settings/backup 负向合同（T3）：clamp / 相对路径 / 空串恢复默认
+r = call("POST", "/api/settings/backup", {"maxPerFile": 0})
+stats = call("GET", "/api/backups/stats")
+check("maxPerFile 0 被 clamp 为 1", (r or {}).get("maxPerFile") == 1 and stats.get("maxPerFile") == 1, str(r)[:60])
+code = call_code("POST", "/api/settings/backup", {"backupDir": "relative/path"})
+r = call("POST", "/api/settings/backup", {"backupDir": "relative/path"})
+check("相对路径 backupDir 400", code == 400 and "error" in (r or {}), f"HTTP {code}")
+r = call("POST", "/api/settings/backup", {"backupDir": ""})
+stats = call("GET", "/api/backups/stats")
+check("空 backupDir 恢复默认目录", (r or {}).get("dir") == stats.get("defaultDir"), str(r)[:60])
+# 恢复设置（同数据目录二连跑的前置条件：maxPerFile=5 供"满上限还原"段使用）
+r = call("POST", "/api/settings/backup", {"autoBackup": True, "maxPerFile": 5})
+check("恢复 autoBackup=true maxPerFile=5",
+      (r or {}).get("autoBackup") is True and (r or {}).get("maxPerFile") == 5, str(r)[:60])
+
+# 段末清理：酒馆条目进回收站 → 移除根 → 重扫 → 删除空目录
+for tid in (tcard_id, tlore_id):
+    call("POST", f"/api/items/{tid}/delete", {})
+call("DELETE", "/api/roots", {"path": TAVERN})
+call("POST", "/api/rescan")
+check("酒馆根已移除", all(os.path.normcase((rr or {}).get("path") or "") != os.path.normcase(TAVERN)
+                        for rr in call("GET", "/api/meta").get("roots") or []))
+shutil.rmtree(TAVERN, ignore_errors=True)
+try: os.rmdir(os.path.dirname(TAVERN))  # .smoke 父目录空了就一并撤掉
+except OSError: pass
+
+print("== 错误合同（v0.5.2 回归）==")
+code = call_code("GET", "/api/items/unknownid0000")
+check("未知条目 id 404", code == 404, f"HTTP {code}")
+code = call_code("GET", "/api/thumb/unknownid0000")
+check("未知缩略图 id 404", code == 404, f"HTTP {code}")
+
+lore_items = call("GET", "/api/items?kind=lorebook")  # 此刻仅剩测试书（酒馆书已在上一段清理）
+code = call_code("POST", f"/api/cards/{lore_items[0]['id']}/saveas", {})
+check("错 kind 的 saveas 400", code == 400, f"HTTP {code}")
+
+code = call_code("POST", "/api/roots", {"path": ""})
+check("空路径注册根 400", code == 400, f"HTTP {code}")
+
+# cards 端点的 409（T4：此前只测过 text PUT）。外部把文件 mtime 拨早 1 小时——
+# 只动时间戳不追加内容（不损伤 PNG），差值远超 1s 容差，断言与机器快慢无关
+conflict_items = call("GET", "/api/items?kind=character&q=" + urllib.parse.quote("图像卡"))
+check("409 夹具就绪", len(conflict_items) == 1 and conflict_items[0]["fileName"] == "图像卡.png",
+      str([i["fileName"] for i in conflict_items]))
+conflict_item = call("GET", f"/api/items/{conflict_items[0]['id']}")
+stale = conflict_item["modifiedAt"]
+t_old = time.time() - 3600
+os.utime(conflict_item["fullPath"], (t_old, t_old))
+time.sleep(1.5)
+body = {"fields": {"description": "不应写入"}, "expectedModified": stale}
+code = call_code("PUT", f"/api/cards/{conflict_item['id']}", body)
+r = call("PUT", f"/api/cards/{conflict_item['id']}", body)
+check("cards PUT 过期 modified 409", code == 409 and "已被外部" in ((r or {}).get("error") or ""), f"HTTP {code}")
+card_now = call("GET", f"/api/cards/{conflict_item['id']}")["card"]["data"]
+check("409 未写入文件", card_now["description"] == "图像卡描述", card_now["description"])
+
+code = call_code("GET", f"/api/text/{conflict_item['id']}")  # PNG 非文本扩展名
+r = call("GET", f"/api/text/{conflict_item['id']}")
+check("非文本扩展名 400", code == 400 and (r or {}).get("error") == "该文件类型不支持文本编辑", f"HTTP {code}")
 
 print(f"\n结果：{ok_count} 通过，{fail_count} 失败")
 sys.exit(1 if fail_count else 0)

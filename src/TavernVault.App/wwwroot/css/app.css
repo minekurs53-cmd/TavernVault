@@ -337,7 +337,8 @@ select:hover { color: var(--text); }
   background: var(--surface); border-bottom: 1px solid var(--border);
 }
 .editor-head h2 { margin: 0; font-size: 14px; }
-.editor-head .file-name { color: var(--text-3); font-size: 12px; }
+/* 超长文件名截断省略，不把保存按钮挤出视口（v0.5.2） */
+.editor-head .file-name { color: var(--text-3); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dirty-dot { width: 7px; height: 7px; border-radius: 50%; background: #ffb02e; display: none; }
 .dirty .dirty-dot { display: block; }
 .editor-head .spacer { flex: 1; }

@@ -143,7 +143,7 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 | 页面白屏/模块加载失败 | 浏览器控制台读 `window.__errs`（index.html 内置探针） |
 | `--data` 目录没生效 | Git Bash 吞了反斜杠；用相对路径 `--data=.smoke/data` |
 | 仓库/Release 目录体积莫名增长 | WebView2 浏览器缓存 `bin/.../TavernVault.exe.WebView2\`（窗口模式每次运行都会增长，曾积累到 69M）。可整体删除，重开自动重建；`--server` 模式不产生 |
-| git push 连不上 github | 代理 7897 未启动；仓库已配 `http.proxy` |
+| git push 连不上 github | 代理 7890 未启动；仓库已配 `http.proxy` |
 | 页面能打开但请求全 401 | 外部浏览器没有令牌（预期）——UI 只能经 WebView2 外壳使用；脚本用 `server-connection.json` 里的 token |
 | 保存返回 409「文件已被外部修改」 | 文件在外部被改动或另一窗口已保存。**v0.5.2 起前端会自动重扫索引**并提示重新打开该条目；连续两次保存第二枪报 409 属预期（第一次已改 mtime） |
 | 启动提示「已在运行」 | 单实例 Mutex 防护：**同一数据目录**只允许一个实例（v0.5.1 起按数据目录隔离，窗口模式 + `--server` 冒烟可并存） |

@@ -345,7 +345,7 @@ dotnet build TavernVault.slnx -c Release
 2. **`dotnet build` 增量构建偶发不拷贝 wwwroot**。已在 `TavernVault.App.csproj` 加 `CopyFrontendFiles` Target（AfterTargets=Build，按时间戳强制同步）。若仍怀疑前端没更新，直接对比 `bin/.../wwwroot` 与 `src/.../wwwroot` 的时间戳/大小。
 3. **仓库体积会悄悄增长**：窗口模式运行时 WebView2 把浏览器缓存写在 `bin/.../TavernVault.exe.WebView2\`（曾积累 69M）。该目录可随时整体删除（自动重建）；`--server` 无窗口模式不产生。
 4. **前端语法校验必须用 `.mjs`**：`node --check x.js` 按 script 模式，抓不到模块级错误（如非 async 函数里用 await、重复 import）。正确做法：`cp x.js /tmp/x.mjs && node --check /tmp/x.mjs`。
-5. **GitHub 直连失败**（国内网络）：本仓库已配置 `git config http.proxy http://127.0.0.1:7897`（用户系统代理）。推送前若报 `Failed to connect to github.com`，确认代理在监听 7897。
+5. **GitHub 直连失败**（国内网络）：本仓库已配置 `git config http.proxy http://127.0.0.1:7890`（用户系统代理）。推送前若报 `Failed to connect to github.com`，确认代理在监听 7897。
 
 ---
 
@@ -438,7 +438,7 @@ dotnet build TavernVault.slnx -c Release
 - [ ] 前端改动后用 `.mjs` 方式 `node --check` 全部 5 个 js（api/app/editor/main/util）
 - [ ] 改动 Core 后跑 `dotnet test`；改动 API 后跑 `smoke_api.py`（临时 data 目录，**注意 Git Bash 下 `--data` 用相对路径**）
 - [ ] UI 改动用浏览器截图核对，读 `window.__errs` 确认无模块错误
-- [ ] 提交前 `git status` 确认分支（`qoder/TavernVault`）；推送走代理 7897
+- [ ] 提交前 `git status` 确认分支（`qoder/TavernVault`）；推送走代理 7890
 - [ ] 任何写操作只在 `testdata/` 临时目录验证，真实库只读
 - [ ] 改动条目模型（`LibraryItem`）记得 `IndexVersion` +1，否则旧索引增量复用会缺新字段
 

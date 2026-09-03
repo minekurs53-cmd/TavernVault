@@ -6,3 +6,4 @@ ui-shots/
 testdata/
 testdata-server/
 .smoke/
+__pycache__/

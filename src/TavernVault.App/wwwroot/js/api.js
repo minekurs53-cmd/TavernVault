@@ -41,6 +41,7 @@ export const api = {
   meta: () => get('/api/meta'),
   items: (p = {}) => get('/api/items?' + new URLSearchParams(
     Object.entries(p).filter(([, v]) => v !== undefined && v !== null && v !== ''))),
+  item: (id) => get(`/api/items/${id}`), // 单条目最新数据，openDrawer 重取用（v0.5.2 N5）
   rescan: () => post('/api/rescan'),
   card: (id) => get(`/api/cards/${id}`),
   saveCard: (id, body) => put(`/api/cards/${id}`, body),

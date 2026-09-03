@@ -45,8 +45,11 @@ public sealed class BackupStore
     public string Dir => _dir;
 
     /// <summary>
-    /// 更换备份目录：移动现有备份文件与 manifest 到新目录。
-    /// 旧目录在搬空后尝试删除。抛 IOException/UnauthorizedAccessException 时不改变现有状态。
+    /// 更换备份目录：两阶段迁移（v0.5.2 重写，修复 P1-3）。
+    /// 阶段一为纯复制：逐个复制到新目录并校验长度，任一失败即清理本次已复制的产物并原样抛出，
+    /// 期间不改变任何现有状态（_dir/_manifest 不动，旧目录完好，不会出现半写文件顶替原文件的记录）。
+    /// 全部复制校验成功后才进入阶段二提交：切换目录、写新 manifest、再清理旧目录。
+    /// 失败抛 IOException/UnauthorizedAccessException（上层 /api/settings/backup 已包装为 400）。
     /// </summary>
     public void RelocateTo(string newDir)
     {
@@ -55,30 +58,48 @@ public sealed class BackupStore
         {
             if (string.Equals(Path.GetFullPath(_dir), target, StringComparison.OrdinalIgnoreCase))
                 return;
-            Directory.CreateDirectory(target);
 
-            var moved = new List<BackupInfo>();
-            foreach (var info in _manifest.ToList())
+            // ---- 阶段一：纯复制，不触碰现有状态 ----
+            Directory.CreateDirectory(target);
+            var copied = new List<(string Src, string Dst)>();
+            try
             {
-                var src = PathFor(info);
-                var dst = Path.Combine(target, Path.GetFileName(src));
-                try
+                foreach (var info in _manifest)
                 {
-                    if (File.Exists(src)) File.Move(src, dst);
-                    moved.Add(info);
+                    var src = PathFor(info);
+                    if (!File.Exists(src)) continue; // 源已不存在的记录：不迁移文件，随 manifest 保留
+                    var dst = Path.Combine(target, Path.GetFileName(src));
+                    copied.Add((src, dst)); // 先登记再复制：复制中途失败也能清掉半写产物
+                    File.Copy(src, dst, overwrite: true);
+                    if (new FileInfo(dst).Length != new FileInfo(src).Length)
+                        throw new IOException($"迁移校验失败：{info.FileName} 复制后长度与源不一致");
                 }
-                catch (IOException) { moved.Add(info); } // 源文件丢了也保留记录
+            }
+            catch
+            {
+                // 回滚：只删除本次复制到新目录的产物，旧目录与 manifest 保持原状
+                foreach (var (_, dst) in copied)
+                    try { if (File.Exists(dst)) File.Delete(dst); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                throw;
             }
 
-            var oldManifest = _manifestPath;
+            // ---- 阶段二：提交 ----
             var oldDir = _dir;
-            _manifest = moved;
+            var oldManifest = _manifestPath;
             _dir = target;
             _manifestPath = Path.Combine(target, "manifest.json");
-            Save();
+            Save(); // 先落新 manifest 再删旧文件：中断后旧目录仍是完整可用状态，manifest 与文件不错位
 
-            try { if (File.Exists(oldManifest)) File.Delete(oldManifest); } catch (IOException) { }
-            try { if (!Directory.EnumerateFileSystemEntries(oldDir).Any()) Directory.Delete(oldDir); } catch (IOException) { }
+            // 逐个删除旧目录源文件：单个删除失败忽略（此时已双写，记录指向新目录）
+            foreach (var (src, _) in copied)
+                try { File.Delete(src); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+
+            try { if (File.Exists(oldManifest)) File.Delete(oldManifest); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            try { if (!Directory.EnumerateFileSystemEntries(oldDir).Any()) Directory.Delete(oldDir); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
     }
 
@@ -197,7 +218,12 @@ public sealed class BackupStore
 
     public (int count, long bytes) Stats()
     {
-        lock (_lock) return (_manifest.Count, _manifest.Sum(b => b.SizeBytes));
+        // v0.5.2 修复：与 List 一致按磁盘存在性过滤，幽灵条目不再计入统计
+        lock (_lock)
+        {
+            var live = _manifest.Where(b => File.Exists(PathFor(b))).ToList();
+            return (live.Count, live.Sum(b => b.SizeBytes));
+        }
     }
 
     // ---- 内部 ----
@@ -227,13 +253,26 @@ public sealed class BackupStore
     /// <summary>按原路径自定义保留份数（酒馆缓存目录可提高上限）。返回 null 则回退 MaxPerFile。</summary>
     public Func<string, int>? RetentionFor { get; set; }
 
+    /// <summary>v0.5.2 修复 P1-2：启动加载后缺席记录数 &gt; 0 时的告警文本；null 表示全部记录的文件都在磁盘上。</summary>
+    public string? LoadWarning { get; private set; }
+
     private void Load()
     {
+        LoadWarning = null;
         try
         {
             if (File.Exists(_manifestPath) &&
                 JsonSerializer.Deserialize<List<BackupInfo>>(File.ReadAllText(_manifestPath), JsonOpts) is { } list)
-                _manifest = list.Where(b => File.Exists(PathFor(b))).ToList();
+            {
+                // v0.5.2 修复 P1-2：不再按 File.Exists 过滤丢弃记录——备份目录瞬时不可见（移动盘未挂载、
+                // 目录被临时改名等）时，过滤后的空表会在下一次任意写操作时把全部记录从盘上抹掉。
+                // 缺席记录（幽灵条目）保留在内存即可：List/Restore/Stats 都按磁盘过滤/校验，无害且不丢记录。
+                _manifest = list;
+                var missing = list.Count(b => !File.Exists(PathFor(b)));
+                if (missing > 0)
+                    LoadWarning = $"备份目录有 {missing} 条备份记录的文件当前不可见（目录可能被移动、未挂载或文件被外部删除），" +
+                        "相关备份暂不可用；记录已保留，目录恢复后自动可见";
+            }
         }
         catch (Exception ex) when (ex is JsonException or IOException) { }
     }

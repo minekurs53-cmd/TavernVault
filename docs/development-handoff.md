@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.5.1** · 最后更新：2026-09-02
+> 当前版本：**v0.5.2** · 最后更新：2026-09-02
 
 ---
 
@@ -206,6 +206,33 @@ v0.5.1 依据 `docs/full-audit-v0.5.0.md`（4 路子审计的全量审查）修�
 - **配套加固**：`BackupStore.BackupBeforeWrite`/`ThumbnailService.GetAsync` 写前 `CreateDirectory` 自愈（目录被外部清理后不再静默失败）；缩略图失效键改"源 mtime+size 旁车"（还原旧备份后 mtime 回退不再误判新鲜）；`ResolveDataDir` 收敛为单一入口并落绝对路径；单实例 Mutex 按数据目录哈希命名 + 只在持有时 Release；扫描器 tmp 过滤改前缀匹配（`.tmp-xxxxxxxx` 残留不再被索引）。
 - **冒烟可重复（N2）**：清理路径修正（此前双层 `testdata-server\testdata-server\backups` 是空操作）+ thumbs 一并清理；**同一数据目录连续多轮冒烟全绿**成为验收标准之一。新增"满上限还原""导出路径逃逸"两个回归段。
 
+### 3.12 可靠性收尾与编辑器重构（v0.5.2）
+
+v0.5.2 依据 `docs/full-audit-v0.5.0.md` 路线图完成备份可靠性、编辑器质量洼地与测试补齐：
+
+- **备份元数据可靠性（P1-2/P1-3）**：`BackupStore.Load` 不再把"磁盘上暂不可见"的记录丢弃（幽灵条目由 List/Restore/Stats 按磁盘过滤，备份目录瞬时不可见不再导致记录被静默清空），缺席时经 `LoadWarning` 告警（与 settingsWarning 同通道外显）；`RelocateTo` 重写为两阶段——阶段一纯复制 + 长度校验（任一失败清理产物、原状态不动、rethrow），阶段二提交（切目录 → **先落新 manifest** → 再删旧文件/旧 manifest），中断后任意点都保持"manifest 与文件一致、旧目录完整可回退"。
+- **N4 move 补备份**：移动前对原文件 `BackupBeforeWrite`，响应带 warnings（与 rename 同款）——"先备份 → 写盘"链路对移动不再豁免。
+- **角色卡编辑器重构（P1-7/P1-8/P1-10）**：Tab 监听器改 AbortController 生命周期（重建不再累积、旧监听器不再操作已脱离 DOM 的表单并清 dirty——两条静默数据丢失链切断）；保存成功后双视图互刷（raw 与表单都反映最新内容，陈旧视图保存不再回滚保存）；Esc/Ctrl+S 在确认框悬空时让位（`.modal-mask` 检测 + closeEditor 重入保护），Esc 级联死循环修复。连带修复：saveFn 会话残留（加载失败不再误写上一条目）、保存 in-flight 防抖、另存为成功后关闭编辑器（语义明确）、raw 解析失败留在原文视图、世界书搜索框不再标脏、编辑器头部超长文件名省略。
+- **N5 409 恢复路径**：保存收到 409 自动重扫索引 + 提示重开；抽屉打开时按 id 重取最新条目（modifiedAt 新鲜）——quick-reference 旧的"重新打开会重扫"指引由"文档说谎"变为事实。
+- **App 加固（P2）**：9 个未包裹端点收编 Handle/HandleAsync（异常不再无日志 500）；catch 补 OperationCanceledException；三处裸 catch 改"通用文案 + 完整细节进日志"（不再外泄绝对路径）；Kestrel 请求体上限显式化 21MB；move 越权等不变。WebView2：用户数据目录移至 `%LOCALAPPDATA%\TavernVault\WebView2`（bin 不再被撑大）、NewWindowRequested 仅放行 http/https、NavigationStarting 拦截非本机导航（令牌不再可能注入外部页面）。AppLog 跨天触发一次清理。前端杂项：refreshItems 请求序号防乱序、401 专属提示、tv-view 白名单、boot 失败隐藏 loading、removeRoot 失败 toast。
+- **测试补齐（A2/A4/A5/A6/A9）**：新增 `TavernGuardTests`（酒馆源强制备份、TT 保留 10 份、TavernDetector 环境变量探测、RelocateTo 两阶段成败、Load 幽灵告警）；冒烟新增"酒馆护栏"（403/force/强制备份/settings 负向，夹具放 `.smoke/酒馆源` 避免与外层 normal 根嵌套抢注）与"错误合同"两段；删除空壳 Unit1 测试。
+
+### 3.13 格式识别与酒馆官方对照（v0.5.2 核查）
+
+对照官方用户数据目录（characters / worlds / OpenAI Settings / TextGeneration Settings / themes / regex / instruct / context / sysprompt / QuickReplies / avatars / backgrounds）逐类核查 `TypeDetector` 与编辑端点。**结论：主干一致，存在三类差异**，已列入 §11 队列（v0.6）：
+
+| 类别 | 官方格式/行为 | TavernVault 现状 | 结论 |
+|---|---|---|---|
+| 角色卡 | PNG tEXt chara/ccv3；JSON V1/V2/V3 | 一致（内嵌书保形合并） | ✔ |
+| 世界书（worlds/） | `entries` 对象（uid 键）、ST 内部格式 | 一致 | ✔ |
+| 独立 Spec-V2 世界书 / NovelAI 导出 | `entries` 可为数组；条目 `keys/enabled` | 能识别为 lorebook，但 `GET /api/lore` 仅接受对象（数组返回 400），`PUT` 会把数组容器改写为对象 | **容器不保形**——违反本仓库自订"数组/对象不可互换"约定 |
+| 对话预设（OpenAI Settings/） | `prompts` + `prompt_order` | 一致 | ✔ |
+| 文本补全预设（TextGeneration Settings/） | 采样参数 JSON（无 prompts） | 未识别 → 落"文本" | 缺类型 |
+| 美化主题（themes/） | `main_text_color`、**`italics_text_color`**、**`quote_text_color`**、`blur_tint_color`、`shadow_color`… | 可识别（其余键命中），但 ThemeKeys 含官方不存在的字段名 `italics_color`/`quote_color`；`bogus_folders` 归属待核 | 字段清单需对齐 |
+| 正则（regex/） | `scriptName` + `findRegex` | 一致 | ✔ |
+| instruct / context / sysprompt 模板、QuickReplies | 各自专用 JSON 结构 | 未识别 → 落"文本" | 缺类型 |
+| 头像 / 背景 / 音效等资产 | 图片/音频 | → "其他" | 设计如此（低优先） |
+
 ---
 
 ## 4. REST API 参考
@@ -346,12 +373,13 @@ dotnet build TavernVault.slnx -c Release
 | v0.4.3 | **手风琴 + 滚动隔离 + 可移植性** | 侧栏分类/子目录/标签三分区手风琴（单开互斥、0fr→1fr 平滑过渡、空分区置灰）；整窗滚动 bug 修复（html/body overflow:hidden，滚动收敛到侧栏与内容区内部，flex min-height:0 链）；`TavernDetector`/`EnsureDefaultRoot` 去硬编码（环境变量 + %USERPROFILE% 约定探测）；全仓库文档脱敏（零机器特定路径）；冒烟脚本路径改用 `TESTDATA` 变量；**fix-1** 修复弹窗超高无法滚动（`.modal` max-height + overflow-y）、版本号改四段式显示 `vX.Y.Z fix-N`、确立版本号规范（见 quick-reference） |
 | v0.5.0 | **深度优化（依据 docs/architecture-review.md）** | 修复 PNG 另存为静默数据损坏（删多余 WriteAllTextAsync + PNG 夹具回归）；本地 API 会话令牌（X-TV-Token / ?token=，恒定时间比对）+ Host 白名单 + server-connection.json；备份失败显性告警（warnings 外显 + UI toast）+ AppLog 滚动日志；写路径增量更新（`_byId` 字典 + `UpsertItem`/`RemoveItem` 替换 11 处全量 Rescan，**UpsertItem 回填收藏/标签**）+ SaveSettings 原子写；编辑并发防护（expectedModified→409）+ 单实例 Mutex；文档数字收敛（测试数/版本号单一事实源） |
 | v0.5.1 | **安全与可靠性加固（依据 docs/full-audit-v0.5.0.md）** | 详见 §3.11。P0：预设可视化 XSS（role 未转义）。P1：扫描跳过 junction、内嵌书导出文件名清洗、settings.json 损坏防护（+index.bak）、还原满上限自逐出（原子写回）、缩略图随数据目录。N1/N2/N3 既有项收尾；冒烟同目录可重复成为验收标准 |
+| v0.5.2 | **可靠性收尾 + 编辑器重构 + 测试补齐（full-audit §8 路线）** | 详见 §3.12。备份：Load 保留幽灵记录 + LoadWarning、RelocateTo 两阶段迁移；move 补写前备份（N4）；编辑器：Tab AbortController + 保存双视图互刷 + Esc 栈顶让位（两条静默数据丢失链切断）+ 409 自动重扫（N5）；App：9 端点异常收编、请求体上限 21MB、WebView2 UDF 搬家 + 导航拦截；测试：TavernGuardTests 6 项 + 冒烟酒馆护栏/错误合同两段，删除 Unit1 空壳 |
 
 ### 9.2 当前状态（截至 2026-09-02）
 
-- 分支 `qoder/TavernVault`；v0.5.1 已提交（改动：19 文件修改 + 新增两份审查文档）。
-- v0.5.1 验证情况：Release 构建 0 警告 0 错误；单元测试 49/49 全绿（新增 5 项：满上限还原、junction 跳过、SanitizeFileName、Title 清洗、settings 损坏防护）；冒烟 **81 项 × 同一数据目录连续 3 轮全绿**（新增满上限还原、导出路径逃逸回归段）；前端 5 个 js `node --check` 通过。UI 清单待跑一轮（重点：预设可视化正常渲染、含恶意 role 的预设不再注入、409 提示文案）。
-- 审查报告：`docs/full-audit-v0.5.0.md` 为当前**已知问题权威清单**（P2 项与 v0.5.2/v0.6 计划以它为准）。
+- 分支 `qoder/TavernVault`；v0.5.2 已提交（改动：18 文件 +488/-121，含新增 TavernGuardTests）。
+- v0.5.2 验证情况：Release 构建 0 警告 0 错误；单元测试 54/54 全绿（+6：TavernGuardTests）；冒烟 **105 项 × 同一数据目录 2 轮全绿**（+24：酒馆护栏、错误合同）；前端 5 个 js `node --check` 通过。UI 清单待跑一轮（编辑器重构面大：表单/JSON 互切、保存互刷、Esc、409 恢复、另存为关闭）。
+- 审查报告：`docs/full-audit-v0.5.0.md` 为**已知问题权威清单**（剩余 P2 与 v0.6 计划以它为准）。
 
 ### 9.3 Git 信息
 
@@ -368,7 +396,6 @@ dotnet build TavernVault.slnx -c Release
 3. 备份按"文件名"归档：两个同名不同目录的文件备份会混在同一子目录（manifest 记录了完整路径，还原不受影响，但列表会混）。
 4. 扫描是手动/操作后触发，无 FileSystemWatcher，外部改动需手动重扫。
 5. 界面文案与格式字段面向 SillyTavern 主流格式；非标准文件落到"文本/其他"分类，不会出错。
-6. move 端点尚无写前备份（rename/编辑/还原有）；409 后前端恢复路径依赖手动重扫（见 full-audit N4/N5）。
 
 ---
 
@@ -376,14 +403,16 @@ dotnet build TavernVault.slnx -c Release
 
 ### 未完成（当前收尾项）
 
-- [ ] 浏览器 UI 清单跑一轮（预设可视化渲染 / 恶意 role 不注入 / 409 文案）
+- [ ] 浏览器 UI 清单跑一轮（编辑器重构面大：表单/JSON 互切、保存互刷、Esc、409 恢复、另存为关闭语义、预设可视化）
 
-### 近期方向（v0.5.2，依据 full-audit §8 路线图）
+### 近期方向（v0.6，依据 full-audit §8 路线图）
 
-1. **备份元数据可靠性三连**：RelocateTo 两阶段迁移、Load 缺席记录保留（防备份目录瞬时不可见清空记录）——full-audit P1-2/P1-3。
-2. **角色卡编辑器重构**：Tab 事件委托 + 保存后双视图互刷 + Esc 栈顶分发——full-audit P1-7/P1-8/P1-10（含静默数据丢失两条路径）。
-3. **测试补齐**：酒馆护栏（403/force/强制备份/TT 10 份）零断言是最大缺口；settings/backup 全分支、409 四端点、错误合同批补。
-4. **N5**：409 后前端自动重扫 + 重取条目；**N4**：move 补写前备份。
+1. **API 集成测试进 `dotnet test`**：用 TestServer 收编冒烟，摆脱"手工起服务再跑脚本"两步走，接入 GitHub Actions CI。
+2. **前端安全网 + 拆分**：editor.js 先落 UI 自动化冒烟再拆 god-file；编辑器 dirty/saveFn 会话化（消除跨会话窄窗竞态，full-audit P1-7 深修项）。
+3. **备份健康度**：设置弹窗显示上次成功备份时间与备份目录可写性探测。
+4. **发布/分发文档**：打包方式、WebView2 前置、升级数据迁移（full-audit §5 遗留）。
+5. **格式识别对齐酒馆官方**（对照表见 §3.13）：ThemeKeys 字段修正（`italics_text_color`/`quote_text_color`，核查 `bogus_folders` 归属）；独立世界书容器保形（`GET/PUT /api/lore` 支持 entries 数组与 Spec-V2 条目，行为对齐 `CharacterBook` 的保形策略）；新增类型识别：文本补全预设（TextGeneration Settings）、instruct/context/sysprompt 模板、QuickReplies、NovelAI 导出条目；`TavernDetector.Subdirs` 接入清单同步扩充。配检测夹具单测与冒烟。
+6. **新建文件**：各分类支持一键新建空白模板——角色卡（V2/V3 骨架）、世界书（ST 格式空 entries）、预设（prompts+prompt_order 骨架）、美化（官方字段骨架）、正则/脚本（骨架）；入口为分类空态引导 + 工具栏「新建」；写入当前普通库根，重名自动加序号（复用 `GetSaveAsPath` 语义），创建后直接进入对应编辑器。
 
 ### 中远期方向（v0.6+）
 
@@ -409,4 +438,4 @@ dotnet build TavernVault.slnx -c Release
 
 ---
 
-**文档版本**：3.1 · **最后更新**：2026-09-02 · 对应程序版本 v0.5.1
+**文档版本**：3.2 · **最后更新**：2026-09-02 · 对应程序版本 v0.5.2

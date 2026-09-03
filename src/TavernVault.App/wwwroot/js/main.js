@@ -129,7 +129,12 @@ export async function showSettings() {
           okText: '移除', danger: true,
         });
         if (!ok) return;
-        await api.removeRoot(r.path);
+        try {
+          await api.removeRoot(r.path);
+        } catch (e) {
+          toast(e.message, 'err'); // 移除失败不再静默（v0.5.2）
+          return;
+        }
         await refreshMeta();
         renderRoots();
         renderSidebar();
@@ -265,6 +270,11 @@ function updateScanInfo() {
 async function boot() {
   initTheme();
   hydrateIcons();
+  // 恢复上次视图：与 tv-library 同款白名单校验，非法回写 grid（须在 initShell 前，按钮高亮才正确）（v0.5.2）
+  if (!['grid', 'list'].includes(state.view)) {
+    state.view = 'grid';
+    localStorage.setItem('tv-view', 'grid');
+  }
   initShell();
 
   $('#btn-rescan').addEventListener('click', doRescan);
@@ -293,8 +303,12 @@ async function boot() {
     renderSidebar();
     await refreshItems();
   } catch (e) {
+    $('#loading').hidden = true; // 失败时隐藏常驻“正在加载…”（v0.5.2）
     document.getElementById('empty').hidden = false;
-    document.getElementById('empty').textContent = `无法连接本地服务：${e.message}`;
+    // 401 是令牌失效而非服务不可达，单独提示（v0.5.2）
+    document.getElementById('empty').textContent = /401|未授权/.test(String(e.message || ''))
+      ? '会话令牌无效：请通过应用窗口打开，或重启应用'
+      : `无法连接本地服务：${e.message}`;
   }
 }
 

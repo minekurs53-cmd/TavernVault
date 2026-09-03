@@ -6,6 +6,9 @@ import { refreshItems, refreshMeta, kindMeta } from './app.js';
 
 let dirty = false;
 let onCloseCleanup = null;
+let tabController = null; // #editor-tabs 监听器生命周期：每次重建先 abort，防旧监听器累积（v0.5.2 P1-7）
+let closing = false; // closeEditor 重入保护（v0.5.2 P1-10）
+let saving = false; // 保存 in-flight 防抖（v0.5.2）
 
 function markDirty() {
   dirty = true;
@@ -22,6 +25,9 @@ function clearDirty() {
 // 搭建编辑器骨架（头部 + 快捷键），返回内容容器
 function mountEditor(item, title, tabsHtml = '') {
   dirty = false;
+  saveFn = null; // 清除上一会话残留；构建失败时保持 null，Ctrl+S 只提示不误写（v0.5.2）
+  saveAsFn = null;
+  saving = false; // 重置防抖，避免上一会话未完成的保存阻塞新会话（v0.5.2）
   const overlay = document.getElementById('editor-overlay');
   overlay.hidden = false;
   overlay.innerHTML = `
@@ -44,6 +50,11 @@ function mountEditor(item, title, tabsHtml = '') {
 
   onCloseCleanup = (e) => {
     // 捕获阶段拦截并阻断传播，避免底层抽屉/弹窗同时响应 Esc
+    // 确认框悬空时交给其自身的 Esc 处理：本监听器先注册，直接返回防 Esc 级联重入（v0.5.2 P1-10）
+    if (document.querySelector('.modal-mask')) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') e.preventDefault();
+      return; // 悬空期间 Ctrl+S 也不写盘
+    }
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
@@ -75,6 +86,7 @@ export async function openEditor(item) {
     else if (item.kind === 'preset') await buildPresetEditor(item);
     else await buildRawEditor(item, item.kind);
   } catch (e) {
+    disableSaveUi(); // 加载失败：禁用头部保存/另存为，saveFn 保持 null（v0.5.2）
     body.innerHTML = '';
     body.appendChild(el(`<div class="empty">加载失败：${escapeHtml(e.message)}</div>`));
   }
@@ -86,33 +98,48 @@ export async function openBookEditor(item) {
   try {
     await buildLoreEditor(item, { embedded: true });
   } catch (e) {
+    disableSaveUi(); // 同 openEditor：加载失败禁用保存（v0.5.2）
     body.innerHTML = '';
     body.appendChild(el(`<div class="empty">加载失败：${escapeHtml(e.message)}</div>`));
   }
 }
 
 export async function closeEditor() {
-  if (dirty) {
-    const ok = await confirmDialog({
-      title: '放弃修改？',
-      message: '当前有未保存的修改，关闭后将丢失。',
-      okText: '放弃修改', danger: true,
-    });
-    if (!ok) return;
-  }
-  clearDirty();
-  const overlay = document.getElementById('editor-overlay');
-  overlay.hidden = true;
-  overlay.innerHTML = '';
-  if (onCloseCleanup) {
-    document.removeEventListener('keydown', onCloseCleanup, true);
-    onCloseCleanup = null;
+  if (closing) return; // 重入保护：确认框悬空期间再次触发直接忽略（v0.5.2 P1-10）
+  closing = true;
+  try {
+    if (dirty) {
+      const ok = await confirmDialog({
+        title: '放弃修改？',
+        message: '当前有未保存的修改，关闭后将丢失。',
+        okText: '放弃修改', danger: true,
+      });
+      if (!ok) return;
+    }
+    clearDirty();
+    const overlay = document.getElementById('editor-overlay');
+    overlay.hidden = true;
+    overlay.innerHTML = '';
+    if (onCloseCleanup) {
+      document.removeEventListener('keydown', onCloseCleanup, true);
+      onCloseCleanup = null;
+    }
+    tabController?.abort(); // 丢弃残留的 tab 监听器（v0.5.2 P1-7）
+    tabController = null;
+  } finally {
+    closing = false;
   }
 }
 
 let saveFn = null;
 let saveAsFn = null;
-function doSave() { saveFn?.(); }
+function doSave() {
+  if (saving) return; // in-flight 防抖：连点只触发一次，第二枪会假 409（v0.5.2）
+  if (document.querySelector('.modal-mask')) return; // 确认框悬空时不写盘（v0.5.2 P1-10）
+  if (!saveFn) { toast('加载失败，无法保存', 'err'); return; } // 构建失败时保持 null（v0.5.2）
+  saving = true;
+  saveFn().finally(() => { saving = false; });
+}
 function doSaveAs() {
   if (!saveAsFn) { toast('当前视图不支持另存为', 'err'); return; }
   saveAsFn?.();
@@ -121,6 +148,27 @@ function doSaveAs() {
 function bindDirty(root) {
   root.addEventListener('input', () => markDirty());
   root.addEventListener('change', () => markDirty());
+}
+
+// 加载失败后禁用头部保存/另存为按钮（v0.5.2）
+function disableSaveUi() {
+  const overlay = document.getElementById('editor-overlay');
+  const save = overlay.querySelector('.editor-save');
+  const saveAs = overlay.querySelector('.editor-saveas');
+  if (save) save.disabled = true;
+  if (saveAs) saveAs.disabled = true;
+}
+
+// 保存失败统一出口：409（文件已被外部修改）时自动重扫索引并提示用户重开（v0.5.2 N5）
+async function handleSaveError(e) {
+  if (String(e.message || '').includes('已被外部')) {
+    await refreshItems();
+    await refreshMeta();
+    toast(e.message, 'err');
+    toast('已重新扫描，请关闭后重新打开该条目再保存', 'err');
+  } else {
+    toast(e.message, 'err');
+  }
 }
 
 // ============ 角色卡编辑 ============
@@ -140,9 +188,13 @@ const CARD_FIELDS = [
 ];
 
 async function buildCharacterEditor(item, preloaded = null) {
+  // 每次重建换新 signal，移除旧 tab 监听器：旧监听器会操作已脱离 DOM 的表单并清模块级 dirty（v0.5.2 P1-7）
+  tabController?.abort();
+  tabController = new AbortController();
   const data = preloaded ? { card: preloaded } : await api.card(item.id);
   let card = data.card; // 完整卡片 JSON
   let dataNode = card.data || card;
+  let refreshGreetings = null; // 备用开场白列表刷新入口，供保存后回填复用（v0.5.2 P1-8）
 
   const tabs = $('#editor-tabs');
   tabs.hidden = false;
@@ -182,11 +234,12 @@ async function buildCharacterEditor(item, preloaded = null) {
     });
 
     if (sec.title === '对话') {
-      const gaBox = el(`<div class="field"><label>备用开场白（${(dataNode.alternate_greetings || []).length}）</label><div class="greetings"></div>
+      const gaBox = el(`<div class="field"><label>备用开场白（<span class="ga-count">${(dataNode.alternate_greetings || []).length}</span>）</label><div class="greetings"></div>
         <button class="btn sm" data-add-greeting>＋ 添加备用开场白</button></div>`);
       const list = gaBox.querySelector('.greetings');
       const renderGreetings = () => {
         list.innerHTML = '';
+        gaBox.querySelector('.ga-count').textContent = (dataNode.alternate_greetings || []).length;
         (dataNode.alternate_greetings || []).forEach((g, i) => {
           const item = el(`<div class="greeting-item">
             <textarea data-greeting="${i}">${escapeHtml(g)}</textarea>
@@ -205,6 +258,7 @@ async function buildCharacterEditor(item, preloaded = null) {
         });
       };
       renderGreetings();
+      refreshGreetings = renderGreetings; // 暴露给保存后的回填（v0.5.2 P1-8）
       gaBox.querySelector('[data-add-greeting]').addEventListener('click', () => {
         if (!Array.isArray(dataNode.alternate_greetings)) dataNode.alternate_greetings = [];
         dataNode.alternate_greetings.push('');
@@ -223,10 +277,10 @@ async function buildCharacterEditor(item, preloaded = null) {
   rawView.appendChild(raw.root);
   bindDirty(rawView);
 
+  // { signal } 绑定：随 tabController 一起销毁，重建不再累积监听器（v0.5.2 P1-7）
   tabs.addEventListener('click', (e) => {
     const tab = e.target.closest('[data-tab]')?.dataset.tab;
     if (!tab) return;
-    tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === e.target));
     if (tab === 'raw') {
       if (dirty) {
         // 表单 → 原始视图：先把表单内容同步进 JSON
@@ -238,8 +292,10 @@ async function buildCharacterEditor(item, preloaded = null) {
       rawView.hidden = false;
     } else {
       if (dirty) {
-        // 原始视图 → 表单：解析最新 JSON 并重建表单
-        try { card = JSON.parse(raw.area.value); } catch { /* 状态栏已提示 */ }
+        // 原始视图 → 表单：解析最新 JSON 并重建表单；解析失败留在原文视图（v0.5.2）
+        const parsed = tryParseJson(raw.area.value);
+        if (!parsed) { toast('JSON 解析失败，已留在原文视图', 'err'); return; }
+        card = parsed;
         dataNode = card.data || card;
         clearDirty();
         buildCharacterEditor(item, card);
@@ -248,7 +304,9 @@ async function buildCharacterEditor(item, preloaded = null) {
       formView.hidden = false;
       rawView.hidden = true;
     }
-  });
+    // 切换成功后才更新高亮，解析失败时保持原文视图选中态（v0.5.2）
+    tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  }, { signal: tabController.signal });
 
   function applyFormToCard() {
     formView.querySelectorAll('[data-field]').forEach((inp) => {
@@ -289,9 +347,16 @@ async function buildCharacterEditor(item, preloaded = null) {
       // 重新加载以拿到服务端合并后的最新数据
       const fresh = await api.card(r.id || item.id);
       card = fresh.card;
+      // 保存成功后互刷两个视图（对齐预设编辑器），防止之后从陈旧视图保存整体回滚本次结果（v0.5.2 P1-8）
+      dataNode = card.data || card;
+      raw.area.value = JSON.stringify(card, null, 2);
+      formView.querySelectorAll('[data-field]').forEach((inp) => {
+        inp.value = dataNode[inp.dataset.field] ?? '';
+      });
+      refreshGreetings?.();
     } catch (e) {
       if (e instanceof SyntaxError) toast('JSON 格式错误：' + e.message, 'err');
-      else toast(e.message, 'err');
+      else await handleSaveError(e); // 409 恢复路径（v0.5.2 N5）
     }
   };
 
@@ -309,9 +374,10 @@ async function buildCharacterEditor(item, preloaded = null) {
       toast(`已另存为 ${r.fileName}`);
       refreshItems();
       refreshMeta();
+      closeEditor(); // 另存后关闭，避免继续编辑原文件造成误导（v0.5.2）
     } catch (e) {
       if (e instanceof SyntaxError) toast('JSON 格式错误：' + e.message, 'err');
-      else toast(e.message, 'err');
+      else await handleSaveError(e);
     }
   };
 }
@@ -454,7 +520,8 @@ async function buildLoreEditor(item, opts = {}) {
     renderForm();
   });
   searchInput.addEventListener('input', renderList);
-  bindDirty(body);
+  // 只绑表单区：搜索框输入不属于编辑内容，不应标脏（v0.5.2）
+  bindDirty(body.querySelector('.lore-form'));
 
   renderList();
   renderForm();
@@ -485,7 +552,7 @@ async function buildLoreEditor(item, opts = {}) {
         refreshItems();
         refreshMeta();
       }
-    } catch (e) { toast(e.message, 'err'); }
+    } catch (e) { await handleSaveError(e); } // 409 恢复路径（v0.5.2 N5）
   };
 
   saveAsFn = async () => {
@@ -494,10 +561,12 @@ async function buildLoreEditor(item, opts = {}) {
       const r = embedded
         ? await api.saveCardBookAs(item.id, payload) // 导出为独立世界书
         : await api.saveLoreAs(item.id, payload);
+      clearDirty();
       toast(`已另存为 ${r.fileName}`);
       refreshItems();
       refreshMeta();
-    } catch (e) { toast(e.message, 'err'); }
+      closeEditor(); // 另存后关闭，避免继续编辑原文件造成误导（v0.5.2）
+    } catch (e) { await handleSaveError(e); }
   };
 }
 
@@ -544,6 +613,9 @@ function tryParseJson(text) {
 }
 
 async function buildPresetEditor(item) {
+  // 同角色卡编辑器：重建先移除旧 tab 监听器（v0.5.2 P1-7）
+  tabController?.abort();
+  tabController = new AbortController();
   let { content } = await api.text(item.id);
   let preset = tryParseJson(content);
 
@@ -857,7 +929,7 @@ async function buildPresetEditor(item) {
     visualView.hidden = !visualActive;
     rawView.hidden = visualActive;
     tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  });
+  }, { signal: tabController.signal }); // 随 tabController 一起销毁（v0.5.2 P1-7）
 
   const currentText = () => {
     if (visualActive) return JSON.stringify(preset, null, 2);
@@ -882,7 +954,7 @@ async function buildPresetEditor(item) {
       preset = tryParseJson(content);
       raw.area.value = content;
       if (visualActive) renderVisual();
-    } catch (e) { toast(e.message, 'err'); }
+    } catch (e) { await handleSaveError(e); } // 409 恢复路径（v0.5.2 N5）
   };
 
   saveAsFn = async () => {
@@ -890,10 +962,12 @@ async function buildPresetEditor(item) {
     try { text = currentText(); } catch (err) { toast(err.message, 'err'); return; }
     try {
       const r = await api.saveTextAs(item.id, text);
+      clearDirty();
       toast(`已另存为 ${r.fileName}`);
       refreshItems();
       refreshMeta();
-    } catch (e) { toast(e.message, 'err'); }
+      closeEditor(); // 另存后关闭，避免继续编辑原文件造成误导（v0.5.2）
+    } catch (e) { await handleSaveError(e); }
   };
 }
 
@@ -981,7 +1055,7 @@ async function buildRawEditor(item, kind) {
       toast('已保存');
       refreshItems();
       refreshMeta();
-    } catch (e) { toast(e.message, 'err'); }
+    } catch (e) { await handleSaveError(e); } // 409 恢复路径（v0.5.2 N5）
   };
 
   saveAsFn = async () => {
@@ -991,9 +1065,11 @@ async function buildRawEditor(item, kind) {
     }
     try {
       const r = await api.saveTextAs(item.id, raw.area.value);
+      clearDirty();
       toast(`已另存为 ${r.fileName}`);
       refreshItems();
       refreshMeta();
-    } catch (e) { toast(e.message, 'err'); }
+      closeEditor(); // 另存后关闭，避免继续编辑原文件造成误导（v0.5.2）
+    } catch (e) { await handleSaveError(e); }
   };
 }

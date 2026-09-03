@@ -170,10 +170,13 @@ function setFilter(patch) {
 
 // ============ 列表 ============
 
+let itemsSeq = 0; // 请求序号：并发刷新只有最新响应生效，防乱序覆盖 state.items（v0.5.2）
+
 export async function refreshItems() {
+  const seq = ++itemsSeq;
   $('#loading').hidden = false;
   try {
-    state.items = await api.items({
+    const items = await api.items({
       kind: state.filter.kind || '',
       q: state.filter.q,
       tag: state.filter.tag || '',
@@ -183,7 +186,10 @@ export async function refreshItems() {
       root: state.filter.root || '',
       sort: state.filter.sort,
     });
+    if (seq !== itemsSeq) return; // 已有更新的请求在途，丢弃过期响应（v0.5.2）
+    state.items = items;
   } catch (e) {
+    if (seq !== itemsSeq) return;
     toast(e.message, 'err');
     state.items = [];
   }
@@ -334,10 +340,16 @@ async function toggleFavorite(item, btn) {
 
 export async function openDrawer(id) {
   state.selectedId = id;
-  const item = state.items.find((i) => i.id === id);
-  if (!item) return;
+  const cached = state.items.find((i) => i.id === id);
+  if (!cached) return;
   const overlay = $('#drawer-overlay');
   overlay.hidden = false;
+  // 重取最新条目：409（文件已被外部修改）后缓存里的 modifiedAt 已过期，重开抽屉必须拿到新鲜时间戳（v0.5.2 N5）
+  let item = cached;
+  try {
+    item = await api.item(id);
+  } catch (e) { toast(e.message, 'err'); } // 取失败退回缓存条目渲染
+  if (overlay.hidden) return; // 等待期间已被关闭（v0.5.2）
   renderDrawer(item);
   $('#drawer-overlay').querySelector('.drawer-close').focus();
 }

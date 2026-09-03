@@ -35,11 +35,15 @@ public static class ApiServer
 
         var port = Array.Find(args, a => a.StartsWith("--port="));
         builder.WebHost.UseUrls(port is null ? "http://127.0.0.1:0" : $"http://127.0.0.1:{port[7..]}");
+        // v0.5.2 修复 P2-4：写路径显式上限——略高于 20MB 文本读取上限，从 Kestrel 默认 30MB 变为显式契约，
+        // 避免超限文件"写入即自锁"后连 GET 都无法通过
+        builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 21_000_000);
 
         var vault = new Vault(new SettingsStore(ResolveDataDir(args)));
         AppLog.Init(vault.DataDir);
         AppLog.Info($"启动 v{typeof(ApiServer).Assembly.GetName().Version?.ToString(4)}（数据目录 {vault.DataDir}）");
-        if (vault.SettingsWarning is { } warn) AppLog.Warn(warn);
+        // v0.5.2 修复 P1-2：设置告警与备份目录缺席告警合并为一条，经日志与 /api/meta.settingsWarning 外显
+        if (CombinedWarning(vault.SettingsWarning, vault.Backups.LoadWarning) is { } warn) AppLog.Warn(warn);
         EnsureDefaultRoot(vault);
         var thumbs = new ThumbnailService(vault.DataDir);
         var headless = args.Contains("--server");
@@ -124,7 +128,7 @@ public static class ApiServer
     private static void MapApi(WebApplication app, Vault vault, ThumbnailService thumbs, bool headless)
     {
         // ---------- 元信息 / 扫描 ----------
-        app.MapGet("/api/meta", () =>
+        app.MapGet("/api/meta", (HttpContext ctx) => Handle(ctx, () =>
         {
             var (tags, total) = vault.AllUserTags();
             var libraries = vault.BuildLibraries();
@@ -154,10 +158,10 @@ public static class ApiServer
                     tags = l.Tags.Select(t => new { tag = t.Tag, count = t.Count }),
                 }).ToList(),
                 lastScanAt = vault.LastScanAt,
-                settingsWarning = vault.SettingsWarning,
+                settingsWarning = CombinedWarning(vault.SettingsWarning, vault.Backups.LoadWarning),
                 version = typeof(ApiServer).Assembly.GetName().Version?.ToString(4),
             });
-        });
+        }));
 
         app.MapPost("/api/rescan", (HttpContext ctx) => Handle(ctx, () =>
         {
@@ -166,7 +170,8 @@ public static class ApiServer
         }));
 
         // ---------- 条目查询 ----------
-        app.MapGet("/api/items", (string? kind, string? q, string? tag, bool? fav, string? sort, string? dir, string? root, string? source) =>
+        app.MapGet("/api/items", (HttpContext ctx, string? kind, string? q, string? tag, bool? fav, string? sort, string? dir, string? root, string? source) =>
+            Handle(ctx, () =>
         {
             LibrarySource? src = null;
             if (!string.IsNullOrEmpty(source))
@@ -188,29 +193,29 @@ public static class ApiServer
                 Source = src,
             };
             return Json(vault.Query(p));
-        });
+        }));
 
-        app.MapGet("/api/items/{id}", (string id) =>
-            vault.Find(id) is { } item ? Json(item) : Err("条目不存在", 404));
+        app.MapGet("/api/items/{id}", (HttpContext ctx, string id) => Handle(ctx, () =>
+            vault.Find(id) is { } item ? Json(item) : Err("条目不存在", 404)));
 
         // ---------- 缩略图 / 原图 ----------
-        app.MapGet("/api/thumb/{id}", async (string id) =>
+        app.MapGet("/api/thumb/{id}", async (HttpContext ctx, string id) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
             if (item is null || !item.HasEmbeddedCard) return Results.NotFound();
             var path = await thumbs.GetAsync(item);
             return path is null ? Results.NotFound() : Results.File(path, "image/jpeg");
-        });
+        }));
 
-        app.MapGet("/api/image/{id}", (string id) =>
+        app.MapGet("/api/image/{id}", (HttpContext ctx, string id) => Handle(ctx, () =>
         {
             var item = vault.Find(id);
             if (item is null || !item.HasEmbeddedCard) return Results.NotFound();
             return Results.File(item.FullPath, "image/png", enableRangeProcessing: true);
-        });
+        }));
 
         // ---------- 角色卡编辑 ----------
-        app.MapGet("/api/cards/{id}", (string id) =>
+        app.MapGet("/api/cards/{id}", (HttpContext ctx, string id) => Handle(ctx, () =>
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
@@ -220,8 +225,13 @@ public static class ApiServer
                 if (card is null) return Err("无法解析角色卡数据", 400);
                 return Json(new { fileName = item.FileName, card });
             }
-            catch (Exception ex) { return Err(ex.Message, 500); }
-        });
+            catch (Exception ex)
+            {
+                // v0.5.2 修复 P2-2：原始消息可能含绝对路径，只回通用文案；完整异常落日志
+                AppLog.Error($"读取角色卡失败：{item.FullPath}", ex);
+                return Err("读取失败，文件可能已损坏", 500);
+            }
+        }));
 
         // body: { fields: {...}, alternateGreetings: [...], tags: [...], expectedModified? } —— 服务端合并保存，避免整卡回传
         app.MapPut("/api/cards/{id}", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
@@ -355,7 +365,7 @@ public static class ApiServer
         }));
 
         // ---------- 角色卡内嵌世界书（data.character_book） ----------
-        app.MapGet("/api/cards/{id}/book", (string id) =>
+        app.MapGet("/api/cards/{id}/book", (HttpContext ctx, string id) => Handle(ctx, () =>
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
@@ -378,8 +388,13 @@ public static class ApiServer
                 }
                 return Json(new { fileName = item.FileName, entries = list });
             }
-            catch (Exception ex) { return Err(ex.Message, 500); }
-        });
+            catch (Exception ex)
+            {
+                // v0.5.2 修复 P2-2：原始消息可能含绝对路径，只回通用文案；完整异常落日志
+                AppLog.Error($"读取内置世界书失败：{item.FullPath}", ex);
+                return Err("读取失败，文件可能已损坏", 500);
+            }
+        }));
 
         // body: { entries: [{ key, data, raw? }], expectedModified? } —— raw 为 Spec 原条目时合并编辑，否则按 ST 格式写入
         app.MapPut("/api/cards/{id}/book", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
@@ -423,7 +438,7 @@ public static class ApiServer
         }));
 
         // ---------- 世界书编辑 ----------
-        app.MapGet("/api/lore/{id}", (string id) =>
+        app.MapGet("/api/lore/{id}", (HttpContext ctx, string id) => Handle(ctx, () =>
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Lorebook) return Err("不是世界书", 400);
@@ -437,8 +452,13 @@ public static class ApiServer
                     list.Add(new JsonObject { ["key"] = key, ["data"] = value?.DeepClone() });
                 return Json(new { fileName = item.FileName, entries = list });
             }
-            catch (Exception ex) { return Err(ex.Message, 500); }
-        });
+            catch (Exception ex)
+            {
+                // v0.5.2 修复 P2-2：原始消息可能含绝对路径，只回通用文案；完整异常落日志
+                AppLog.Error($"读取世界书失败：{item.FullPath}", ex);
+                return Err("读取失败，文件可能已损坏", 500);
+            }
+        }));
 
         // body: { entries: [{ key, data }], expectedModified? } —— 整体重建 entries，其它顶层键保留
         app.MapPut("/api/lore/{id}", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
@@ -469,14 +489,15 @@ public static class ApiServer
         }));
 
         // ---------- 文本 / 原始 JSON 编辑 ----------
-        app.MapGet("/api/text/{id}", (string id) =>
+        app.MapGet("/api/text/{id}", (HttpContext ctx, string id) => Handle(ctx, () =>
         {
             var item = vault.Find(id);
             if (item is null) return Results.NotFound();
+            if (!File.Exists(item.FullPath)) return Results.NotFound(); // v0.5.2：文件已被外部删除按 404 处理，而非读取抛异常
             if (!TextExtensions.Contains(Path.GetExtension(item.FullPath))) return Err("该文件类型不支持文本编辑", 400);
             if (item.SizeBytes > 20_000_000) return Err("文件过大", 400);
             return Json(new { content = File.ReadAllText(item.FullPath) });
-        });
+        }));
 
         app.MapPut("/api/text/{id}", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
@@ -503,12 +524,12 @@ public static class ApiServer
         }));
 
         // ---------- 备份与还原 ----------
-        app.MapGet("/api/items/{id}/backups", (string id) =>
+        app.MapGet("/api/items/{id}/backups", (HttpContext ctx, string id) => Handle(ctx, () =>
         {
             var item = vault.Find(id);
             if (item is null) return Results.NotFound();
             return Json(vault.Backups.List(item.FullPath));
-        });
+        }));
 
         app.MapPost("/api/backups/{bid}/restore", (HttpContext ctx, string bid) => Handle(ctx, () =>
         {
@@ -522,7 +543,7 @@ public static class ApiServer
         app.MapDelete("/api/backups/{bid}", (HttpContext ctx, string bid) => Handle(ctx, () =>
             vault.Backups.Delete(bid) ? Json(new { ok = true }) : Err("备份不存在", 404)));
 
-        app.MapGet("/api/backups/stats", () =>
+        app.MapGet("/api/backups/stats", (HttpContext ctx) => Handle(ctx, () =>
         {
             var (count, bytes) = vault.Backups.Stats();
             return Json(new
@@ -534,7 +555,7 @@ public static class ApiServer
                 dir = vault.Backups.Dir,
                 defaultDir = Path.Combine(vault.DataDir, "backups"),
             });
-        });
+        }));
 
         app.MapPost("/api/settings/backup", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
@@ -614,13 +635,17 @@ public static class ApiServer
                 return Err("酒馆来源的文件不允许移出原根（聊天通过路径引用）", 403);
             FileOperations.GuardUnderRoots(root, vault.Settings.LibraryRoots.Select(r => r.Path));
             var userData = vault.GetUserData(id); // Id 随路径变化，先取快照
+            // v0.5.2 修复 N4：移动前先备份原文件（与 rename 端点同款）。
+            // 必须在移动前收集——备份的是移动前的原文件。
+            var warnings = new List<string>();
+            AddWarnings(warnings, vault.BackupBeforeWrite(item.FullPath));
             var oldPath = item.FullPath;
             var newPath = FileOperations.Move(item, root, dir);
             vault.RemoveItem(oldPath);
             vault.UpsertItem(newPath);
             var newId = LibraryScanner.ComputeId(newPath);
             vault.SetUserData(newId, userData.Favorite, userData.Tags);
-            return Json(new { ok = true, id = newId });
+            return Json(new { ok = true, id = newId, warnings });
         }));
 
         app.MapPost("/api/items/{id}/delete", (HttpContext ctx, string id) => Handle(ctx, () =>
@@ -709,7 +734,7 @@ public static class ApiServer
             return picked is null ? Json<object?>(null) : Json(new { path = picked });
         }));
 
-        app.MapGet("/api/categories", () =>
+        app.MapGet("/api/categories", (HttpContext ctx) => Handle(ctx, () =>
         {
             var dirs = vault.Query(new QueryParams())
                 .GroupBy(i => (i.RootPath, i.RelativeDir))
@@ -722,7 +747,7 @@ public static class ApiServer
                 .OrderBy(g => g.root).ThenBy(g => g.dir)
                 .ToList();
             return Json(dirs);
-        });
+        }));
     }
 
     // ---- 统一包装：强制返回 IResult，统一错误处理 ----
@@ -733,7 +758,8 @@ public static class ApiServer
         try { return action(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                                        or DirectoryNotFoundException or ArgumentException
-                                       or InvalidOperationException or Win32Exception)
+                                       or InvalidOperationException or Win32Exception
+                                       or OperationCanceledException) // v0.5.2 补：客户端断开（P2-2）
         {
             AppLog.Error($"{ctx.Request.Method} {ctx.Request.Path} 失败", ex);
             return Err(ex.Message, 400);
@@ -746,7 +772,8 @@ public static class ApiServer
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                                        or DirectoryNotFoundException or ArgumentException
                                        or InvalidOperationException or Win32Exception
-                                       or System.Text.Json.JsonException)
+                                       or System.Text.Json.JsonException
+                                       or OperationCanceledException) // v0.5.2 补：客户端断开（P2-2）
         {
             AppLog.Error($"{ctx.Request.Method} {ctx.Request.Path} 失败", ex);
             return Err(ex.Message, 400);
@@ -759,6 +786,16 @@ public static class ApiServer
         if (w is null) return;
         warnings.Add(w);
         AppLog.Warn(w);
+    }
+
+    /// <summary>
+    /// v0.5.2 修复 P1-2：合并多条启动期告警（设置损坏 / 备份记录缺席），
+    /// 拼接后统一经 /api/meta.settingsWarning 外显（可含多条，以"；"分隔）；无告警时为 null。
+    /// </summary>
+    private static string? CombinedWarning(params string?[] warnings)
+    {
+        var parts = warnings.Where(w => !string.IsNullOrWhiteSpace(w)).ToArray();
+        return parts.Length == 0 ? null : string.Join("；", parts);
     }
 
     /// <summary>

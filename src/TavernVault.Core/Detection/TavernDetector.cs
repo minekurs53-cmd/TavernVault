@@ -5,8 +5,15 @@ namespace TavernVault.Core.Detection;
 /// <summary>检测本机 SillyTavern / TauriTavern 安装目录。不包含任何机器特定路径：优先环境变量，回退用户目录约定。</summary>
 public static class TavernDetector
 {
+    // v0.6.0 扩充对齐官方 src/constants.js 的 USER_DIRECTORY_TEMPLATE：
+    // instruct / context / sysprompt / QuickReplies 与官方一致；
+    // 文本补全预设官方目录名为 "TextGen Settings"（键 textGen_Settings）——
+    // handoff §3.14 写作 "TextGeneration Settings" 系笔误，两者都探测以免漏接旧约定。
     public static readonly string[] Subdirs =
-        ["characters", "worlds", "OpenAI Settings", "themes", "regex"];
+    [
+        "characters", "worlds", "OpenAI Settings", "themes", "regex",
+        "TextGen Settings", "TextGeneration Settings", "instruct", "context", "sysprompt", "QuickReplies",
+    ];
 
     /// <summary>
     /// 检测酒馆数据目录。候选顺序：环境变量（TV_SILLYTAVERN_DATA / TV_TAURITAVERN_DATA）

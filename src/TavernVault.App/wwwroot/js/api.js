@@ -63,6 +63,8 @@ export const api = {
   rename: (id, name, force = false) => post(`/api/items/${id}/rename`, { name, force }),
   move: (id, root, dir, force = false) => post(`/api/items/${id}/move`, { root, dir, force }),
   remove: (id) => post(`/api/items/${id}/delete`),
+  // 新建空白模板文件（v0.6.0）：root 缺省时服务端取第一个普通库根
+  createItem: (kind, name, root) => post('/api/items/create', { kind, name, root }),
   reveal: (id) => post('/api/reveal', { id }),
   addRoot: (path, source = 'normal') => post('/api/roots', { path, source }),
   removeRoot: (path) => del('/api/roots', { path }),

@@ -114,7 +114,7 @@ public class VaultQueryTests : IDisposable
         Assert.Equal(["局外存储", "SillyTavern", "TauriTavern"], libs.Select(l => l.Label));
         // 不变量：全局 total 与 kinds == 三库之和
         Assert.Equal(total, libs.Sum(l => l.Total));
-        Assert.All(libs, l => Assert.Equal(8, l.Kinds.Count)); // 8 类全列含 0
+        Assert.All(libs, l => Assert.Equal(13, l.Kinds.Count)); // v0.6.0 起 13 类全列含 0
         Assert.All(libs, l => Assert.Equal(l.Total, l.Kinds.Sum(k => k.Count))); // 库内不变量
         // rootCount = 注册根数量（非资源数量）
         Assert.All(libs, l => Assert.Equal(1, l.RootCount));

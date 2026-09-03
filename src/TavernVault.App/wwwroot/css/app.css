@@ -542,3 +542,19 @@ select:hover { color: var(--text); }
 }
 .backup-item .b-time { flex: 1; font-weight: 600; }
 .backup-item .b-size { color: var(--text-3); font-size: 11px; }
+
+/* ---- 新建文件（v0.6.0）：topbar 按钮 + 类型下拉浮层 ---- */
+.create-menu {
+  position: fixed; z-index: 80;
+  min-width: 172px; padding: 5px;
+  display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+}
+.create-menu-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 10px; border-radius: 7px;
+  font-size: 13px; color: var(--text); text-align: left;
+}
+.create-menu-item:hover { background: var(--surface-2); }
+.create-menu-item .ico { width: 15px; height: 15px; }

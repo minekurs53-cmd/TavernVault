@@ -71,7 +71,7 @@ function mountEditor(item, title, tabsHtml = '') {
 }
 
 export async function openEditor(item) {
-  const editable = ['character', 'lorebook', 'preset', 'theme', 'script', 'text'];
+  const editable = ['character', 'lorebook', 'preset', 'textgen', 'instruct', 'context', 'sysprompt', 'quickreplies', 'theme', 'script', 'text']; // v0.6.0 新类型走通用原文编辑器
   if (!editable.includes(item.kind)) {
     toast('该类型暂不支持在程序内编辑', 'err');
     return;
@@ -392,6 +392,8 @@ const POSITION_OPTIONS = [
 async function buildLoreEditor(item, opts = {}) {
   const embedded = !!opts.embedded; // 角色卡内嵌世界书模式
   const data = embedded ? await api.cardBook(item.id) : await api.lore(item.id);
+  // v0.6.0 容器保形：独立世界书 GET 回传 container("object"/"array")，保存时原样带回
+  const loreContainer = data.container;
   let entries = data.entries.map((e) => ({ key: e.key, data: e.data || {}, raw: e.raw }));
   let selected = 0;
 
@@ -541,8 +543,10 @@ async function buildLoreEditor(item, opts = {}) {
         refreshItems();
         refreshMeta();
       } else {
+        // container 原样回传：数组容器（Spec V2/NovelAI 导出）走服务端保形合并，不会被改写成对象
         const r = await api.saveLore(item.id, {
-          entries: entries.map((e) => ({ key: e.key, data: e.data })),
+          entries: entries.map((e) => ({ key: e.key, data: e.data, raw: e.raw })),
+          container: loreContainer,
           expectedModified: item.modifiedAt,
         });
         clearDirty();

@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-03 · 对应 v0.5.3
+> 最后更新：2026-09-03 · 对应 v0.6.0
 
 ## 一分钟了解
 
@@ -104,6 +104,7 @@ POST   /api/roots                      # {path, source: normal|tavernST|tavernTT
 DELETE /api/roots                      # {path}
 POST   /api/tavern/detect              # 探测本机酒馆
 POST   /api/tavern/connect             # {source} 批量接入子目录
+POST   /api/items/create               # 新建文件 {kind,name,root?}：仅普通库根，重名加序号
 POST   /api/pick-folder                # 原生目录选择框（无窗口模式 400）
 ```
 
@@ -117,6 +118,11 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 | `theme` | 美化 | 主题 CSS/JSON 特征 |
 | `script` | 脚本 | 酒馆助手脚本/正则特征 |
 | `text` | 文本 | 可读文本扩展名 |
+| `textgen` | 文本补全预设 | temp+rep_pen 或 ≥3 采样字段 |
+| `instruct` | 指令模板 | ≥2 个 *_sequence 字段 |
+| `context` | 上下文模板 | story_string |
+| `sysprompt` | 系统提示模板 | name+content+post_history |
+| `quickreplies` | 快捷回复 | qrList/quickReplies 数组 |
 | `archive` | 压缩包 | zip/7z/rar 等 |
 | `other` | 其他 | 兜底 |
 
@@ -127,7 +133,7 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 | 预设启用字段 | `prompt_order[].order[].enabled`，**不是 `enable`** |
 | 系统管理提示词 | `prompts[].system_prompt === true`，内容只读防误删 |
 | 内嵌书条目双格式 | Spec V2(`keys/enabled/insertion_order`) ↔ ST(`key/disable/order/position 0-6`)；读转 ST、写保形合并，`Raw` 原样回传 |
-| entries 容器形态 | 数组/对象**不能互换**，否则下游工具解析失败 |
+| entries 容器形态 | 数组/对象**不能互换**；v0.6.0 起 /api/lore 按容器保形（GET 回传 container，PUT 按容器写回） |
 | PNG 卡 | 保存必须一次重写 chara+ccv3 两个块（`WriteTexts`） |
 | JSON 卡 | 保存同步根级 V1 镜像（`SyncLegacyMirror`） |
 | 索引版本 | 改 `LibraryItem` 字段 → `IndexVersion` +1（当前 3） |

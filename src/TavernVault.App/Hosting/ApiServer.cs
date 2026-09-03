@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using System.Text.Json.Nodes;
 using TavernVault.App.Services;
+using TavernVault.Core;
 using TavernVault.Core.Cards;
 using TavernVault.Core.Detection;
 using TavernVault.Core.FileOps;
@@ -295,7 +296,8 @@ public static class ApiServer
             return Json(new { ok = true, id = nid, fileName = Path.GetFileName(newPath) });
         }));
 
-        // 世界书：编辑后的条目写入新文件（其它顶层键保留）
+        // 世界书：编辑后的条目写入新文件（其它顶层键保留）。
+        // v0.6.0：容器保形——源文件 entries 为数组时按数组容器写回（同 PUT 的保形合并）。
         app.MapPost("/api/lore/{id}/saveas", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
@@ -305,13 +307,32 @@ public static class ApiServer
 
             var root = JsonNode.Parse(File.ReadAllText(item.FullPath)) as JsonObject
                 ?? throw new InvalidOperationException("原文件不是 JSON 对象");
-            var entries = new JsonObject();
-            foreach (var node in list)
+            if (root["entries"] is JsonArray)
             {
-                if (node is not JsonObject e) continue;
-                entries[e["key"]?.GetValue<string>() ?? entries.Count.ToString()] = e["data"]?.DeepClone() ?? new JsonObject();
+                root["entries"] = new JsonArray();
+                var entries = new List<CharacterBook.BookEntry>();
+                foreach (var node in list)
+                {
+                    if (node is not JsonObject e) continue;
+                    entries.Add(new CharacterBook.BookEntry
+                    {
+                        MapKey = e["key"]?.GetValue<string>() ?? entries.Count.ToString(),
+                        St = e["data"] as JsonObject ?? new JsonObject(),
+                        Raw = (e["raw"] as JsonObject)?.DeepClone().AsObject(),
+                    });
+                }
+                CharacterBook.WriteEntries(root, entries);
             }
-            root["entries"] = entries;
+            else
+            {
+                var entries = new JsonObject();
+                foreach (var node in list)
+                {
+                    if (node is not JsonObject e) continue;
+                    entries[e["key"]?.GetValue<string>() ?? entries.Count.ToString()] = e["data"]?.DeepClone() ?? new JsonObject();
+                }
+                root["entries"] = entries;
+            }
 
             var newPath = FileOperations.GetSaveAsPath(item.FullPath);
             await File.WriteAllTextAsync(newPath, root.ToJsonString(JsonOptions.WriteIndented), new UTF8Encoding(false));
@@ -362,6 +383,62 @@ public static class ApiServer
             await File.WriteAllTextAsync(newPath, content, new UTF8Encoding(false));
             vault.UpsertItem(newPath);
             return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath), fileName = Path.GetFileName(newPath) });
+        }));
+
+        // ---------- 新建文件（v0.6.0） ----------
+        // body: { kind, name, root? } —— 按空白模板创建文件并登记索引。
+        // 护栏哲学：仅普通库根可新建，酒馆来源的文件由酒馆按路径/文件名引用，禁止从这里写入。
+        app.MapPost("/api/items/create", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
+        {
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            var kindKey = body?["kind"]?.GetValue<string>();
+            var name = body?["name"]?.GetValue<string>();
+
+            // kind 必须是可新建类型：ItemKindText 键能解析，且 ExtensionFor 非 null（archive/other 拒绝）
+            if (kindKey is null || !ItemKindText.All.Any(a => a.Key == kindKey) ||
+                ContentTemplates.ExtensionFor(ItemKindText.All.First(a => a.Key == kindKey).Kind) is not { } ext)
+                return Err("该类型不支持新建", 400);
+            var kind = ItemKindText.All.First(a => a.Key == kindKey).Kind;
+
+            if (string.IsNullOrWhiteSpace(name)) return Err("名称不能为空", 400);
+            // DisplayName/名称不可信内容统一清洗（同内嵌书导出），杜绝经名称拼出库外路径
+            var safeName = FileOperations.SanitizeFileName(name);
+            if (safeName.Length == 0) return Err("名称清洗后为空，请换个名字", 400);
+
+            // 目标根：缺省 = 第一个普通库根；显式指定时必须是已注册且来源为普通（酒馆来源 400）
+            LibraryRoot? target;
+            if (string.IsNullOrWhiteSpace(body?["root"]?.GetValue<string>()))
+            {
+                target = vault.Settings.LibraryRoots.FirstOrDefault(r => r.Source == LibrarySource.Normal);
+                if (target is null) return Err("没有可用的普通库根，请先在库设置中添加", 400);
+            }
+            else
+            {
+                var rootPath = body!["root"]!.GetValue<string>();
+                target = vault.FindRoot(rootPath);
+                if (target is null || target.Source != LibrarySource.Normal)
+                    return Err("新建仅支持普通库根（酒馆来源的目录由酒馆管理）", 400);
+            }
+
+            // 重名处理：自实现" (n)" 序号后缀（2 起累加），与 GetSaveAsPath 的编号风格一致；
+            // 比"-副本 时间戳"对新建场景更直观，故不复用 GetSaveAsPath
+            var targetPath = Path.Combine(target.Path, safeName + ext);
+            int n = 2;
+            while (File.Exists(targetPath))
+                targetPath = Path.Combine(target.Path, $"{safeName} ({n++}){ext}");
+
+            // 写入：JSON 缩进 + UTF8 无 BOM（与既有写路径同款）；text 直接写字符串
+            var content = kind == ItemKind.Text
+                ? ContentTemplates.CreateText(kind, safeName) ?? ""
+                : ContentTemplates.CreateJson(kind, safeName)?.ToJsonString(JsonOptions.WriteIndented) ?? "";
+            AppLog.Info($"新建文件：{targetPath}");
+            await File.WriteAllTextAsync(targetPath, content, new UTF8Encoding(false));
+
+            // 新文件在已登记根内，UpsertItem 自动建条目（含类型识别）
+            var item = vault.UpsertItem(targetPath);
+            return item is null
+                ? Err("文件已创建，但未能登记索引（目录可能已不在库根内）", 500)
+                : Json(new { ok = true, id = item.Id, fileName = item.FileName });
         }));
 
         // ---------- 角色卡内嵌世界书（data.character_book） ----------
@@ -438,6 +515,10 @@ public static class ApiServer
         }));
 
         // ---------- 世界书编辑 ----------
+        // v0.6.0：entries 容器形态（对象/数组）不可互换。
+        // ST 内部世界书 entries 为对象（uid 键）；Spec V2 / NovelAI 导出为数组（条目 keys/enabled）。
+        // 返回体新增 container: "object" | "array"；数组容器复用 CharacterBook 的 Spec→ST
+        // 读取逻辑，条目附 raw（Spec 原条目）供写回时保形合并。前端默认对象场景不变。
         app.MapGet("/api/lore/{id}", (HttpContext ctx, string id) => Handle(ctx, () =>
         {
             var item = vault.Find(id);
@@ -445,12 +526,32 @@ public static class ApiServer
             try
             {
                 var root = JsonNode.Parse(File.ReadAllText(item.FullPath)) as JsonObject;
-                if (root?["entries"] is not JsonObject entries) return Err("缺少 entries 结构", 400);
-
-                var list = new JsonArray();
-                foreach (var (key, value) in entries)
-                    list.Add(new JsonObject { ["key"] = key, ["data"] = value?.DeepClone() });
-                return Json(new { fileName = item.FileName, entries = list });
+                switch (root?["entries"])
+                {
+                    case JsonObject entries:
+                        {
+                            var list = new JsonArray();
+                            foreach (var (key, value) in entries)
+                                list.Add(new JsonObject { ["key"] = key, ["data"] = value?.DeepClone() });
+                            return Json(new { fileName = item.FileName, container = "object", entries = list });
+                        }
+                    case JsonArray:
+                        {
+                            var list = new JsonArray();
+                            foreach (var e in CharacterBook.ReadEntries(root))
+                            {
+                                list.Add(new JsonObject
+                                {
+                                    ["key"] = e.MapKey,
+                                    ["data"] = e.St.DeepClone(),
+                                    ["raw"] = e.Raw?.DeepClone(), // Spec 原条目，保存时原样回传以合并编辑
+                                });
+                            }
+                            return Json(new { fileName = item.FileName, container = "array", entries = list });
+                        }
+                    default:
+                        return Err("缺少 entries 结构", 400);
+                }
             }
             catch (Exception ex)
             {
@@ -460,7 +561,9 @@ public static class ApiServer
             }
         }));
 
-        // body: { entries: [{ key, data }], expectedModified? } —— 整体重建 entries，其它顶层键保留
+        // body: { entries: [{ key, data, raw? }], container?: "array"|"object", expectedModified? }
+        // container="array"：按数组容器写回，条目走 CharacterBook 保形合并（raw 未编辑字段原样保留），
+        // 容器仍为数组；container="object"/缺省：维持整体重建对象 entries 的既有行为，其它顶层键保留。
         app.MapPut("/api/lore/{id}", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var item = vault.Find(id);
@@ -472,20 +575,44 @@ public static class ApiServer
 
             var root = JsonNode.Parse(File.ReadAllText(item.FullPath)) as JsonObject
                 ?? throw new InvalidOperationException("原文件不是 JSON 对象");
-            var entries = new JsonObject();
-            foreach (var node in list)
+            int count;
+
+            if (body["container"]?.GetValue<string>() == "array")
             {
-                if (node is not JsonObject e) continue;
-                var key = e["key"]?.GetValue<string>() ?? entries.Count.ToString();
-                entries[key] = e["data"]?.DeepClone() ?? new JsonObject();
+                // 保形写回：先固定数组容器形态，再交给 CharacterBook 逐条合并
+                root["entries"] = new JsonArray();
+                var entries = new List<CharacterBook.BookEntry>();
+                foreach (var node in list)
+                {
+                    if (node is not JsonObject e) continue;
+                    entries.Add(new CharacterBook.BookEntry
+                    {
+                        MapKey = e["key"]?.GetValue<string>() ?? entries.Count.ToString(),
+                        St = e["data"] as JsonObject ?? new JsonObject(),
+                        Raw = (e["raw"] as JsonObject)?.DeepClone().AsObject(),
+                    });
+                }
+                CharacterBook.WriteEntries(root, entries);
+                count = entries.Count;
             }
-            root["entries"] = entries;
+            else
+            {
+                var entries = new JsonObject();
+                foreach (var node in list)
+                {
+                    if (node is not JsonObject e) continue;
+                    var key = e["key"]?.GetValue<string>() ?? entries.Count.ToString();
+                    entries[key] = e["data"]?.DeepClone() ?? new JsonObject();
+                }
+                root["entries"] = entries;
+                count = entries.Count;
+            }
 
             var warnings = new List<string>();
             AddWarnings(warnings, vault.BackupBeforeWrite(item.FullPath));
             await File.WriteAllTextAsync(item.FullPath, root.ToJsonString(JsonOptions.WriteIndented), new UTF8Encoding(false));
             vault.UpsertItem(item.FullPath);
-            return Json(new { ok = true, count = entries.Count, warnings, modifiedAt = File.GetLastWriteTime(item.FullPath) });
+            return Json(new { ok = true, count, warnings, modifiedAt = File.GetLastWriteTime(item.FullPath) });
         }));
 
         // ---------- 文本 / 原始 JSON 编辑 ----------

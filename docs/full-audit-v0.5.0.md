@@ -5,7 +5,7 @@
 > **v0.5.2 已修复**——P1-2（Load 保留幽灵记录 + LoadWarning）、P1-3（RelocateTo 两阶段）、P1-7/P1-8/P1-10（编辑器 Tab/互刷/Esc 重构）、N4（move 备份）、N5（409 自动重扫 + 抽屉重取）、P2-2（异常收编 + catch 补 OCE + 通用文案）、P2-4（请求体上限 21MB）、P2-6（NewWindow 协议白名单 + NavigationStarting 拦截）、P2-1（WebView2 UDF 搬家）、P2-13（AppLog 跨天清理）、前端杂项（refreshItems 竞态、401 文案、tv-view、#loading、removeRoot）、测试缺口 A2/A4/A5/A6/A9（TavernGuardTests 6 项 + 冒烟酒馆护栏/错误合同两段 + 删 Unit1）。验证：单测 54/54、同数据目录冒烟 2 轮 105/105。
 > 剩余项以 §8 路线图为准（v0.6：集成测试收编 + CI、前端拆分、备份健康度、发布文档）。
 > 审查日期：2026-09-01 · 对象：v0.5.0（commit c63c8aa） · 方法：4 个并行子审计（Core 数据完整性 / 前端 / App 宿主与 API 安全 / 测试与文档）逐文件精读 + 主审交叉复核全部 P0/P1 证据 + 动态验证（构建 0 警告、44/44 单测、干净冒烟 74/74、探针复现）。
-> 本报告取代此前两份评审（`architecture-review.md`、`v0.5.0-verification-and-plan.md`）成为当前未修问题的权威清单。已知未修 N1~N6 见 §1，此处不展开。
+> 本报告是已知未修问题的权威清单（早期两轮评审已被本报告取代，git 历史可查）。
 
 ---
 

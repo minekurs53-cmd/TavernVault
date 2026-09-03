@@ -39,9 +39,6 @@ public static class PngChunkIO
     /// 将 tEXt 块（keyword → text）写入 PNG：已有同关键字块则原位替换，否则插到 IHDR 之后。
     /// 未涉及的块（含其 CRC）字节级保留。通过临时文件 + File.Replace 原子落盘。
     /// </summary>
-    public static void WriteText(string path, string keyword, string text) =>
-        WriteTexts(path, [(keyword, text)]);
-
     /// <summary>一次遍历写入多个 tEXt 块（如 chara + ccv3），避免整文件重复重写。</summary>
     public static void WriteTexts(string path, IReadOnlyList<(string Keyword, string Text)> items)
     {

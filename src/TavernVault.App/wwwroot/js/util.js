@@ -8,14 +8,6 @@ export function el(html) {
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 
-export function debounce(fn, ms) {
-  let t;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  };
-}
-
 // ---- 图标（描边风格，viewBox 24）----
 const PATHS = {
   all: 'M4 6h2v2H4zM10 6h10v2H10zM4 11h2v2H4zM10 11h10v2H10zM4 16h2v2H4zM10 16h10v2H10z',

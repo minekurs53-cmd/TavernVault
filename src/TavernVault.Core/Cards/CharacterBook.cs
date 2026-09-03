@@ -58,6 +58,8 @@ public static class CharacterBook
     /// <summary>
     /// 把编辑后的条目写回书节点。容器形态（对象/数组）沿用书节点当前的形态，
     /// 每条按其来源格式写回：Spec 条目合并编辑、ST 条目原样替换。
+    /// v0.6.0：St 与 Spec→ST 转换结果一致的条目视为未编辑，直接写回 Raw 原文
+    /// （字节级保形，合并不再给 extensions 等补默认值）。
     /// </summary>
     public static void WriteEntries(JsonObject book, IReadOnlyList<BookEntry> entries)
     {
@@ -67,9 +69,16 @@ public static class CharacterBook
 
         foreach (var e in entries)
         {
-            var written = e.Raw is not null
-                ? MergeIntoSpec(e.Raw.DeepClone().AsObject(), e.St)
-                : (JsonNode)e.St.DeepClone();
+            JsonNode written;
+            if (e.Raw is null)
+            {
+                written = e.St.DeepClone();
+            }
+            else
+            {
+                var raw = e.Raw.DeepClone().AsObject();
+                written = JsonNode.DeepEquals(SpecToSt(raw), e.St) ? raw : MergeIntoSpec(raw, e.St);
+            }
             if (asMap) map[e.MapKey] = written;
             else list.Add(written);
         }

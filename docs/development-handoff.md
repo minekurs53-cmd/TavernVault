@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.5.3（工作区，待提交）** · 最后更新：2026-09-03
+> 当前版本：**v0.6.0（工作区，待提交）** · 最后更新：2026-09-03
 
 ---
 
@@ -238,6 +238,15 @@ v0.5.2 依据 `docs/full-audit-v0.5.0.md` 路线图完成备份可靠性、编�
 | instruct / context / sysprompt 模板、QuickReplies | 各自专用 JSON 结构 | 未识别 → 落"文本" | 缺类型 |
 | 头像 / 背景 / 音效等资产 | 图片/音频 | → "其他" | 设计如此（低优先） |
 
+### 3.15 v0.6.0：格式对齐落地 + 新建文件
+
+§3.14 的对照结论在本版本落地，外加"新建文件"特性：
+
+- **格式识别对齐**（TypeDetector）：ItemKind 扩至 13 类（新增 textgen/instruct/context/sysprompt/quickreplies，枚举值追加末尾保证旧索引不错位）。识别特征均对照官方源码核实：textgen=`temp`+`rep_pen` 核心或 ≥3 采样键（官方名为 `typical_p`/`mirostat_tau` 等，`typical`/`mirostat_lr` 不存在）；instruct=≥2 个 `*_sequence` 字段；context=`story_string` 单独命中；sysprompt=`{name,content,post_history}` 三键（`post_history` 是与脚本的区分特征，裸 `{name,content}` 仍归脚本）；quickreplies=`qrList`/`quickReplies` 数组。ThemeKeys 修正为官方名（`italics_text_color`/`quote_text_color`/`blur_tint_color`；`bogus_folders` 经核实为官方字段，保留）。`TavernDetector.Subdirs` 扩至 11 项（官方 "TextGen Settings" + 旧约定 "TextGeneration Settings" 双收）。
+- **独立世界书容器保形**：`GET /api/lore` 支持 entries 数组容器（Spec V2/NovelAI 导出）——经 CharacterBook Spec→ST 转换返回统一条目 + `raw`，响应附 `container:"object"|"array"`；PUT 按 container 保形合并（数组容器不再被改写为对象）；saveas 同样保形。`CharacterBook.WriteEntries` 顺带强化：未编辑条目（与转换结果一致）直接写回 Raw 原文，实现"字节级不变"（内嵌书流程同样受益——旧实现会给未编辑条目补默认值）。
+- **新建文件**：`ContentTemplates`（Core/Templates.cs）为 10 个 JSON 类 + text 提供官方格式骨架，硬验收=模板必须被自家 TypeDetector 识别回原 kind（单测 + 冒烟双层覆盖）；`POST /api/items/create`（重名自动 "(n)" 序号；仅普通库根，酒馆来源 400）；前端 topbar「新建」按钮（仅局外库显示）→ 11 类菜单 → 命名 → 创建后直接进入编辑器。editor.js/app.js 可编辑白名单同步扩至 11 类（新类型走通用原文编辑器）。
+- **测试**：单测 100 项（+DetectionTests 20、TemplatesTests 21）；冒烟 191 项（+格式识别对齐、新建文件两段）。UI 目检：新建世界书/文本补全预设全流程通过。
+
 ---
 
 ## 4. REST API 参考
@@ -378,6 +387,7 @@ dotnet build TavernVault.slnx -c Release
 | v0.4.3 | **手风琴 + 滚动隔离 + 可移植性** | 侧栏分类/子目录/标签三分区手风琴（单开互斥、0fr→1fr 平滑过渡、空分区置灰）；整窗滚动 bug 修复（html/body overflow:hidden，滚动收敛到侧栏与内容区内部，flex min-height:0 链）；`TavernDetector`/`EnsureDefaultRoot` 去硬编码（环境变量 + %USERPROFILE% 约定探测）；全仓库文档脱敏（零机器特定路径）；冒烟脚本路径改用 `TESTDATA` 变量；**fix-1** 修复弹窗超高无法滚动（`.modal` max-height + overflow-y）、版本号改四段式显示 `vX.Y.Z fix-N`、确立版本号规范（见 quick-reference） |
 | v0.5.0 | **深度优化（依据第一轮独立架构评审）** | 修复 PNG 另存为静默数据损坏（删多余 WriteAllTextAsync + PNG 夹具回归）；本地 API 会话令牌（X-TV-Token / ?token=，恒定时间比对）+ Host 白名单 + server-connection.json；备份失败显性告警（warnings 外显 + UI toast）+ AppLog 滚动日志；写路径增量更新（`_byId` 字典 + `UpsertItem`/`RemoveItem` 替换 11 处全量 Rescan，**UpsertItem 回填收藏/标签**）+ SaveSettings 原子写；编辑并发防护（expectedModified→409）+ 单实例 Mutex；文档数字收敛（测试数/版本号单一事实源） |
 | v0.5.1 | **安全与可靠性加固（依据 docs/full-audit-v0.5.0.md）** | 详见 §3.11。P0：预设可视化 XSS（role 未转义）。P1：扫描跳过 junction、内嵌书导出文件名清洗、settings.json 损坏防护（+index.bak）、还原满上限自逐出（原子写回）、缩略图随数据目录。N1/N2/N3 既有项收尾；冒烟同目录可重复成为验收标准 |
+| v0.6.0 | **格式对齐 + 新建文件（新功能迭代）** | 详见 §3.15。ItemKind 13 类（5 个官方新类型 + ThemeKeys 修正 + Subdirs 11 项）；独立世界书容器保形（Spec V2/NovelAI 数组格式读改写不再损坏）；新建文件（11 类官方模板 + create 端点 + topbar 入口，创建即编辑）；单测 100、冒烟 191 |
 | v0.5.3 | **v0.5.x 收尾** | UI 清单实跑 12 项全过（index.html 加 `?token=` 回退供外部浏览器冒烟；顺带修复内联脚本语法错误）；奥卡姆剃刀修剪无用代码（2 个旧重载、WriteText 包装、debounce、Console.WriteLine、2 份被取代的评审文档） |
 | v0.5.2 | **可靠性收尾 + 编辑器重构 + 测试补齐（full-audit §8 路线）** | 详见 §3.12。备份：Load 保留幽灵记录 + LoadWarning、RelocateTo 两阶段迁移；move 补写前备份（N4）；编辑器：Tab AbortController + 保存双视图互刷 + Esc 栈顶让位（两条静默数据丢失链切断）+ 409 自动重扫（N5）；App：9 端点异常收编、请求体上限 21MB、WebView2 UDF 搬家 + 导航拦截；测试：TavernGuardTests 6 项 + 冒烟酒馆护栏/错误合同两段，删除 Unit1 空壳 |
 
@@ -444,4 +454,4 @@ dotnet build TavernVault.slnx -c Release
 
 ---
 
-**文档版本**：3.3 · **最后更新**：2026-09-03 · 对应程序版本 v0.5.3
+**文档版本**：4.0 · **最后更新**：2026-09-03 · 对应程序版本 v0.6.0

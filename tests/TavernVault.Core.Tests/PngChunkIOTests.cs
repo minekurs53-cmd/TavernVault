@@ -34,7 +34,7 @@ public class PngChunkIOTests : IDisposable
     public void WriteText_InsertsChunk_AfterIHDR()
     {
         var path = WritePng(TestPng.Build());
-        PngChunkIO.WriteText(path, "chara", "abc123");
+        PngChunkIO.WriteTexts(path, [("chara", "abc123")]);
         Assert.Equal("abc123", PngChunkIO.ReadText(path, "chara"));
     }
 
@@ -47,7 +47,7 @@ public class PngChunkIOTests : IDisposable
             ("zTXt", Encoding.Latin1.GetBytes(marker)),
             TestPng.Text("ccv3", "oldv3")));
 
-        PngChunkIO.WriteText(path, "chara", "new-value");
+        PngChunkIO.WriteTexts(path, [("chara", "new-value")]);
 
         Assert.Equal("new-value", PngChunkIO.ReadText(path, "chara"));
         Assert.Equal("oldv3", PngChunkIO.ReadText(path, "ccv3"));
@@ -61,7 +61,7 @@ public class PngChunkIOTests : IDisposable
     public void WriteText_WritesValidCrc()
     {
         var path = WritePng(TestPng.Build());
-        PngChunkIO.WriteText(path, "chara", "payload");
+        PngChunkIO.WriteTexts(path, [("chara", "payload")]);
 
         var bytes = File.ReadAllBytes(path);
         // 找到 tEXt 块并校验 CRC

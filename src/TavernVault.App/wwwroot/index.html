@@ -91,6 +91,11 @@
 window.__errs = [];
 window.addEventListener('error', e => { window.__errs.push('ERR: ' + e.message + ' @ ' + (e.filename||'') + ':' + (e.lineno||'')); });
 window.addEventListener('unhandledrejection', e => { window.__errs.push('REJ: ' + ((e.reason && e.reason.message) || e.reason)); });
+// WebView2 未注入令牌时（外部浏览器 UI 冒烟）允许 ?token= 显式携带，任何模块加载前生效 (v0.5.3)
+if (!window.__TV_TOKEN__) {
+  const t = new URLSearchParams(location.search).get('token');
+  if (t) window.__TV_TOKEN__ = t;
+}
 </script>
 <script type="module" src="js/main.js?v=0.4.3"></script>
 </body>

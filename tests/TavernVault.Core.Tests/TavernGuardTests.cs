@@ -127,8 +127,8 @@ public class TavernGuardTests : IDisposable
         var oldDir = store.Dir;
         var f1 = WriteFile("一.json", "1");
         var f2 = WriteFile("二.json", "2");
-        Assert.NotNull(store.BackupBeforeWrite(f1));
-        Assert.NotNull(store.BackupBeforeWrite(f2));
+        Assert.NotNull(store.BackupBeforeWrite(f1, out _));
+        Assert.NotNull(store.BackupBeforeWrite(f2, out _));
 
         // 坏目标：路径已被同名文件占用 → Directory.CreateDirectory 抛出，
         // 两阶段设计的失败必须原样抛出且旧目录、manifest、记录分毫不动
@@ -150,8 +150,8 @@ public class TavernGuardTests : IDisposable
         var oldDir = store.Dir;
         var f1 = WriteFile("甲.json", "a");
         var f2 = WriteFile("乙.json", "b");
-        Assert.NotNull(store.BackupBeforeWrite(f1));
-        Assert.NotNull(store.BackupBeforeWrite(f2));
+        Assert.NotNull(store.BackupBeforeWrite(f1, out _));
+        Assert.NotNull(store.BackupBeforeWrite(f2, out _));
 
         var newDir = Path.Combine(_dir, "backups-elsewhere");
         store.RelocateTo(newDir);
@@ -176,9 +176,9 @@ public class TavernGuardTests : IDisposable
         var dataDir = Path.Combine(_dir, "ghost-data");
         var store = new BackupStore(dataDir) { MaxPerFile = 5 };
         var file = WriteFile("幽灵.json", "v1");
-        Assert.NotNull(store.BackupBeforeWrite(file));
+        Assert.NotNull(store.BackupBeforeWrite(file, out _));
         Thread.Sleep(15);
-        Assert.NotNull(store.BackupBeforeWrite(file));
+        Assert.NotNull(store.BackupBeforeWrite(file, out _));
 
         // 手删磁盘上其中一个备份文件（manifest 记录仍在）
         var onDisk = Directory.GetFiles(store.Dir).Where(f => !f.EndsWith("manifest.json")).ToList();

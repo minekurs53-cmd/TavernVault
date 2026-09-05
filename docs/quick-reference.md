@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-05 · 对应 v0.7.9
+> 最后更新：2026-09-05 · 对应 v1.0.0
 
 ## 一分钟了解
 
@@ -23,6 +23,7 @@ dotnet build TavernVault.slnx -c Release
 # 运行
 ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe            # 窗口模式
 ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe --server --port=47999 --data=.smoke/data   # 无窗口
+./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe --portable                                 # 便携模式：数据目录随程序目录（v0.7.7，拷贝即用）
 
 # 测试
 dotnet test TavernVault.slnx -c Release    # 单元测试（数量以输出为准）
@@ -62,6 +63,8 @@ GET /api/items?kind=&q=&tag=&fav=&sort=&dir=&root=&source=
                                        # source=normal|tavernST|tavernTT（非法值 400）
                                        # 酒馆库二级导航用 root=，普通库用 dir=（与 source AND）
 GET /api/items/{id}
+GET /api/thumb/{id}                    # 角色卡缩略图（JPEG，img 标签用 ?token= 通道）
+GET /api/image/{id}                    # 角色卡原图 PNG（支持 Range）
 GET /api/categories                    # 按根+目录聚合
 ```
 

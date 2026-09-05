@@ -85,6 +85,22 @@ public static class FileOperations
         return target;
     }
 
+    /// <summary>
+    /// 同目录唯一化：目标名冲突时在扩展名前追加 " (n)"（n 从 2 起累加），
+    /// 与「新建文件」的序号风格一致。文件名先经 SanitizeFileName 清洗。
+    /// </summary>
+    public static string UniqueDestinationPath(string dir, string fileName)
+    {
+        var name = SanitizeFileName(Path.GetFileNameWithoutExtension(fileName));
+        var ext = Path.GetExtension(fileName);
+        if (name.Length == 0) name = "未命名";
+        var candidate = Path.Combine(dir, name + ext);
+        int n = 2;
+        while (File.Exists(candidate))
+            candidate = Path.Combine(dir, $"{name} ({n++}){ext}");
+        return candidate;
+    }
+
     /// <summary>删除到回收站。</summary>
     public static void Recycle(string path)
     {

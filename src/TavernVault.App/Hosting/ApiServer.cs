@@ -9,6 +9,7 @@ using System.Text.Json.Nodes;
 using TavernVault.App.Services;
 using TavernVault.Core;
 using TavernVault.Core.Cards;
+using TavernVault.Core.Collect;
 using TavernVault.Core.Detection;
 using TavernVault.Core.FileOps;
 using TavernVault.Core.Models;
@@ -438,6 +439,122 @@ public static class ApiServer
                 .Take(100)
                 .ToList();
             return Json(new { rows });
+        }));
+
+        // ---------- 收纳入库（v0.7.3） ----------
+        // 预扫描来源文件夹给出分类预览；确认后批量复制（默认，源不动）进局外库根的类型子目录。
+        // 酒馆库根禁止作为目标（只读托管）；archive/other 不收纳（报告中建议跳过）。
+        app.MapPost("/api/collect/preview", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
+        {
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            var source = body?["source"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(source)) return Err("来源目录为空", 400);
+            var full = Path.GetFullPath(source);
+            if (!Directory.Exists(full)) return Err("来源文件夹不存在", 400);
+
+            var candidates = CollectScanner.Scan(full);
+            var groups = candidates
+                .Where(c => CollectScanner.SubdirFor(c.Kind) is not null)
+                .GroupBy(c => c.Kind)
+                .Select(g => new
+                {
+                    kind = ItemKindText.KeyOf(g.Key),
+                    label = ItemKindText.LabelOf(g.Key),
+                    subdir = CollectScanner.SubdirFor(g.Key),
+                    files = g.Select(c => new
+                    {
+                        path = c.RelativePath,
+                        name = c.FileName,
+                        size = c.SizeBytes,
+                    }).ToList(),
+                })
+                .OrderBy(g => g.kind)
+                .ToList();
+            var skipped = candidates
+                .Where(c => CollectScanner.SubdirFor(c.Kind) is null)
+                .Select(c => new { path = c.RelativePath, name = c.FileName })
+                .ToList();
+            return Json(new { source = full, groups, skipped });
+        }));
+
+        app.MapPost("/api/collect", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
+        {
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            var source = body?["source"]?.GetValue<string>();
+            var rootPath = body?["root"]?.GetValue<string>();
+            var move = body?["move"]?.GetValue<bool>() ?? false;
+            if (string.IsNullOrWhiteSpace(source)) return Err("来源目录为空", 400);
+            var full = Path.GetFullPath(source);
+            if (!Directory.Exists(full)) return Err("来源文件夹不存在", 400);
+
+            var root = vault.Settings.LibraryRoots.FirstOrDefault(r =>
+                string.Equals(Path.GetFullPath(r.Path), Path.GetFullPath(rootPath ?? ""), StringComparison.OrdinalIgnoreCase));
+            if (root is null) return Err("目标库根未登记", 400);
+            if (root.Source != LibrarySource.Normal) return Err("酒馆库根为只读托管，不能作为收纳目标", 400);
+
+            var candidates = CollectScanner.Scan(full).ToDictionary(c => c.RelativePath, StringComparer.OrdinalIgnoreCase);
+            var requested = body?["files"] as JsonArray;
+            List<CollectCandidate> picked;
+            if (requested is not null)
+            {
+                picked = [];
+                foreach (var node in requested.OfType<JsonValue>())
+                {
+                    var rel = node.GetValue<string>();
+                    if (!candidates.TryGetValue(rel, out var c))
+                        return Err($"文件清单包含未知条目：{rel}", 400);
+                    picked.Add(c);
+                }
+            }
+            else
+            {
+                picked = [.. candidates.Values.Where(c => CollectScanner.SubdirFor(c.Kind) is not null)];
+            }
+
+            var report = new List<object>();
+            var warnings = new List<string>();
+            int copied = 0;
+            foreach (var c in picked)
+            {
+                var subdir = CollectScanner.SubdirFor(c.Kind);
+                if (subdir is null)
+                {
+                    report.Add(new { file = c.RelativePath, status = "skipped" });
+                    continue;
+                }
+                try
+                {
+                    var targetDir = Path.Combine(root.Path, subdir);
+                    Directory.CreateDirectory(targetDir);
+                    var dest = FileOperations.UniqueDestinationPath(targetDir, c.FileName);
+                    File.Copy(c.FullPath, dest);
+                    vault.UpsertItem(dest);
+                    copied++;
+                    if (move)
+                    {
+                        try
+                        {
+                            FileOperations.Recycle(c.FullPath);
+                            report.Add(new { file = c.RelativePath, status = "moved", dest = Path.GetFileName(dest) });
+                        }
+                        catch (Exception ex)
+                        {
+                            warnings.Add($"{c.FileName} 已复制但源文件删除失败：{ex.Message}");
+                            report.Add(new { file = c.RelativePath, status = "copied", dest = Path.GetFileName(dest) });
+                        }
+                    }
+                    else
+                    {
+                        report.Add(new { file = c.RelativePath, status = "copied", dest = Path.GetFileName(dest) });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    report.Add(new { file = c.RelativePath, status = "failed", error = ex.Message });
+                }
+            }
+            AppLog.Info($"收纳入库：{full} → {root.Path}，复制 {copied}/{picked.Count}（move={move}）");
+            return Json(new { ok = true, copied, total = picked.Count, warnings, report });
         }));
 
         // ---------- 新建文件（v0.6.0） ----------

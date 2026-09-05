@@ -87,7 +87,10 @@ public static class ApiServer
                 ctx.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate",
         });
 
-        MapApi(app, vault, thumbs, headless);
+        var watcher = new VaultWatcher(vault);
+        watcher.Start(); // 库根文件监视（v0.7.2）：外部改动防抖自动重扫；App 退出时随容器释放
+        app.Lifetime.ApplicationStopping.Register(watcher.Dispose);
+        MapApi(app, vault, thumbs, headless, watcher);
         return new ApiServerHandle(app, token, vault.DataDir);
     }
 
@@ -126,7 +129,8 @@ public static class ApiServer
         // 不存在则保持空库，由前端空态引导用户在「库设置」中添加
     }
 
-    private static void MapApi(WebApplication app, Vault vault, ThumbnailService thumbs, bool headless)
+    private static void MapApi(WebApplication app, Vault vault, ThumbnailService thumbs, bool headless,
+        VaultWatcher watcher)
     {
         // ---------- 元信息 / 扫描 ----------
         app.MapGet("/api/meta", (HttpContext ctx) => Handle(ctx, () =>
@@ -861,6 +865,7 @@ public static class ApiServer
             if (string.IsNullOrWhiteSpace(path)) return Err("路径为空", 400);
             var source = ParseSource(body?["source"]?.GetValue<string>());
             vault.AddRoot(new LibraryRoot { Path = path, Source = source });
+            watcher.RefreshRoots(); // 新库根纳入监视（v0.7.2）
             vault.Rescan();
             return Json(new { ok = true, roots = SerializeRoots(vault) });
         }));
@@ -869,6 +874,7 @@ public static class ApiServer
         {
             var path = (await JsonNode.ParseAsync(req.Body))?["path"]?.GetValue<string>();
             vault.RemoveRoot(path ?? "");
+            watcher.RefreshRoots();
             vault.Rescan();
             return Json(new { ok = true, roots = SerializeRoots(vault) });
         }));

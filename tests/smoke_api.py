@@ -3,6 +3,17 @@
 
 连接信息默认从服务端写出的 server-connection.json 读取（--server 模式产物）；
 TV_CONN / TV_BASE / TV_TOKEN 环境变量可覆写。
+
+覆盖范围总览（2026-09-05 随 v0.7.2 全面复审）：
+- 基础 CRUD：搜索 / 角色卡（字段·整卡·开场白·标签）/ 世界书（对象+数组容器）/ 文本与 JSON 校验 /
+  收藏标签 / 内嵌世界书 / 另存为（自动命名，正向+逃逸回归）/ PNG 完整性 / 重命名移动删除 / 越权防护
+- 可靠性合同：自动备份与还原（含满上限自逐出）/ 409 编辑并发 / 会话令牌 + Host 白名单 / 错误合同
+- 多库与识别：三逻辑库聚合 / 格式识别回落（v0.6.1 回撤 5 类）/ 酒馆子目录探测
+- 酒馆托管（v0.7.1 语义）：护栏 403 矩阵（rename/move/PUT×3）/ 导出副本全链路 / 强制备份（rename force）
+- v0.6.0+：新建文件 6 类模板回路；v0.7.1：修改历史聚合与已删过滤 / meta.dataDir
+- v0.7.2：文件监视自动重扫（直接落盘→自动入库/出库）
+- 永不纳入：reveal 的真实调用（会弹桌面资源管理器窗口，见 v0.7.1 事故记录）；前端逻辑
+  （由 preset-model node 测试 + 浏览器 UI 实跑覆盖）
 """
 import base64
 import json
@@ -530,6 +541,8 @@ check("普通卡夹具就绪", len(png_items) == 1 and png_items[0]["fileName"] 
 png_id = png_items[0]["id"]
 code = call_code("POST", f"/api/items/{png_id}/export", {})
 check("局外源导出 400", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/items/unknownid0000/export", {})
+check("export 未知条目 404", code == 404, f"HTTP {code}")
 
 # 强制备份：酒馆源无视 autoBackup 开关（rename force 是仅存的酒馆写入路径）；普通源关闭后不备
 call("POST", "/api/settings/backup", {"autoBackup": False})
@@ -854,6 +867,57 @@ check("history 条目 id 可直达详情", top is not None and call("GET", f"/ap
 # 仅验证未匹配条目时的 404 合同（不会打开任何窗口）
 code = call_code("POST", "/api/reveal", {"id": "unknownid0000"})
 check("reveal 未知条目 404", code == 404, f"HTTP {code}")
+
+# v0.7.2 审计补缺：text saveas 正向（此前只有错 kind 的 400 负向）
+tmp_text = os.path.join(TESTDATA, "冒烟审计文本.txt")
+with open(tmp_text, "w", encoding="utf-8") as f:
+    f.write("审计夹具")
+call("POST", "/api/rescan")
+audit_items = call("GET", "/api/items?kind=text&q=" + urllib.parse.quote("冒烟审计文本"))
+check("审计文本夹具就绪", len(audit_items) == 1, str([i["fileName"] for i in audit_items]))
+r = call("POST", f"/api/text/{audit_items[0]['id']}/saveas", {"content": "另存内容"})
+check("text saveas 正向", (r or {}).get("ok") is True and "-副本" in (r or {}).get("fileName", ""), str(r)[:80])
+saveas_items = call("GET", "/api/items?kind=text&q=" + urllib.parse.quote("冒烟审计文本-副本"))
+check("text saveas 副本入库", len(saveas_items) == 1 and saveas_items[0]["kind"] == "text",
+      str([i["fileName"] for i in saveas_items]))
+
+# v0.7.2 审计补缺：history 过滤已删除文件（原文件不存在 → 不再出现）
+r = call("PUT", f"/api/text/{audit_items[0]['id']}", {"content": "产生一条备份"})
+check("审计文本产生备份", (r or {}).get("ok") is True, str(r)[:60])
+rows_before = call("GET", "/api/history").get("rows") or []
+check("history 含审计文本", any(x["fileName"] == "冒烟审计文本.txt" for x in rows_before))
+for row in (audit_items + saveas_items):
+    call("POST", f"/api/items/{row['id']}/delete", {})
+rows_after = call("GET", "/api/history").get("rows") or []
+check("history 过滤已删除文件", not any(x["fileName"].startswith("冒烟审计文本") for x in rows_after),
+      str([x["fileName"] for x in rows_after[:5]]))
+
+print("== 文件监视自动重扫（v0.7.2）==")
+# 直接落盘/删除文件，不调 /api/rescan——VaultWatcher 防抖（800ms）后应自动增删索引。
+# 这是「外部/酒馆侧改动自动可见」的核心验收；轮询上限 8s 与防抖+重扫耗时无关机器快慢。
+auto_path = os.path.join(TESTDATA, "冒烟自动重扫.json")
+if os.path.exists(auto_path):
+    os.remove(auto_path)
+with open(auto_path, "w", encoding="utf-8") as f:
+    json.dump({"name": "冒烟自动重扫", "content": "watcher"}, f, ensure_ascii=False)
+deadline = time.time() + 8
+found = []
+while time.time() < deadline:
+    found = call("GET", "/api/items?q=" + urllib.parse.quote("冒烟自动重扫"))
+    if len(found) == 1:
+        break
+    time.sleep(0.4)
+check("新文件自动入库（免手动重扫）", len(found) == 1 and found[0]["kind"] == "script",
+      str([(i["fileName"], i["kind"]) for i in found]))
+os.remove(auto_path)
+deadline = time.time() + 8
+gone = None
+while time.time() < deadline:
+    gone = call("GET", "/api/items?q=" + urllib.parse.quote("冒烟自动重扫"))
+    if not gone:
+        break
+    time.sleep(0.4)
+check("删除后自动出库", gone == [], str(gone)[:80])
 
 print("== 错误合同（v0.5.2 回归）==")
 code = call_code("GET", "/api/items/unknownid0000")

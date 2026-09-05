@@ -14,4 +14,7 @@ public class AppSettings
 
     /// <summary>备份存储目录（自定义位置）。null/空 = 数据目录下的 backups\。</summary>
     public string? BackupRootPath { get; set; }
+
+    /// <summary>库根文件监视（v0.7.2）：外部改动防抖后自动重扫，免手动点「重新扫描」。</summary>
+    public bool AutoWatch { get; set; } = true;
 }

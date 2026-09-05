@@ -756,9 +756,26 @@ export async function refreshMeta() {
   state.meta = await api.meta();
 }
 
+// 后台自动重扫的可视化（v0.7.2）：服务端 VaultWatcher 重扫后 lastScanAt 变化 → 拉新数据刷新界面。
+// 只读轮询、不动任何服务端状态；页面隐藏时跳过，弹窗/编辑器打开时也跳过（避免打断输入）。
+function startAutoRefresh() {
+  setInterval(async () => {
+    if (document.hidden || document.querySelector('.modal-mask')
+      || !document.getElementById('editor-overlay').hidden) return;
+    const fresh = await api.meta().catch(() => null);
+    if (!fresh || fresh.lastScanAt === state.meta?.lastScanAt) return;
+    state.meta = fresh;
+    renderSidebar();
+    refreshItems();
+  }, 5000);
+}
+
 export function initShell() {
   // 侧栏手风琴（单开互斥）
   initAccordion();
+
+  // 自动刷新轮询（v0.7.2：配合服务端文件监视）
+  startAutoRefresh();
 
   // 「新建」按钮 + 下拉菜单（v0.6.0）
   initCreateButton();

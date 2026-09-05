@@ -44,11 +44,12 @@
 
 ```
 库根注册（接入向导一次性完成）：
-<ST数据目录>\data\default-user\characters      → 标记"酒馆源·ST·角色卡"
-…\data\default-user\worlds                     → 标记"酒馆源·ST·世界书"
-…\data\default-user\OpenAI Settings            → 标记"酒馆源·ST·预设"
-…\data\default-user\themes                     → 标记"酒馆源·ST·美化"
-<TT数据目录>\cache\default-user\…（同上四个）  → 标记"酒馆源·TT·…"
+<ST数据目录>\data\default-user\characters      → 标记“酒馆源·ST·角色卡”
+…\data\default-user\worlds                     → 标记“酒馆源·ST·世界书”
+…\data\default-user\OpenAI Settings            → 标记“酒馆源·ST·预设”
+…\data\default-user\themes                     → 标记“酒馆源·ST·美化”
+…\data\default-user\regex                      → 标记“酒馆源·ST·正则”（v0.6.1 起实为 5 个功能分区）
+<TT数据目录>\cache\default-user\…（同上五个）  → 标记“酒馆源·TT·…”
 ```
 
 护栏（同步安全的核心，开发量小）：

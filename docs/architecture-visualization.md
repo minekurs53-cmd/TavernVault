@@ -1,7 +1,7 @@
 # TavernVault 架构与流程可视化
 
 > 配套 `docs/development-handoff.md` §2-§3 的图集。所有图为 Mermaid 源码，可在 GitHub / VS Code（Mermaid 插件）直接渲染。
-> 最后更新：2026-09-03 · 对应 v0.6.0
+> 最后更新：2026-09-05 · 对应 v1.0.0
 
 ## 1. 系统分层架构
 
@@ -13,13 +13,15 @@ graph TB
             MAIN["main.js 入口<br/>主题/设置弹窗"]
             APPJ["app.js 主界面<br/>侧栏/网格/抽屉"]
             EDJ["editor.js 编辑器<br/>卡片/世界书/预设"]
+            PRESET["preset-model.js<br/>预设写回纯函数"]
             APIJ["api.js fetch 封装"]
+            UTIL["util.js 通用工具"]
         end
         subgraph Kestrel["Kestrel (只监听 127.0.0.1)"]
             STATIC["静态文件托管<br/>no-cache"]
-            REST["ApiServer.MapApi<br/>35 个 REST 端点"]
+            REST["ApiServer.MapApi<br/>40 个 REST 端点"]
         end
-        SVCS["Services<br/>缩略图 / 文件夹选择器"]
+        SVCS["Services<br/>缩略图 / 文件夹选择器 /<br/>VaultWatcher 文件监视"]
     end
 
     subgraph Core["TavernVault.Core (无 UI 依赖, 可单测)"]
@@ -56,13 +58,14 @@ graph TB
     STORE --> DATA
     BACKUP --> DATA
     SVCS --> DATA
+    SVCS --> LIB
 ```
 
 ## 2. 启动流程
 
 ```mermaid
 flowchart TD
-    Start(["App.OnStartup"]) --> Parse["解析命令行参数<br/>--server / --port= / --data="]
+    Start(["App.OnStartup"]) --> Parse["解析命令行参数<br/>--server / --port= / --data=<br/>--portable / --token="]
     Parse --> Build["ApiServer.Build"]
     Build --> Default{"首次运行?<br/>LibraryRoots 为空"}
     Default -->|"是"| Guess["EnsureDefaultRoot<br/>探测 %USERPROFILE%\酒馆PR（存在才注册）"]
@@ -125,7 +128,7 @@ flowchart TD
 
     note right of Start
         索引版本门控在 LoadIndex（启动加载时）：
-        version != 3 直接丢弃旧索引返回空，
+        version != 4（当前 IndexVersion）直接丢弃旧索引返回空，
         由本次全量扫描重建——不在扫描尾部判断
     end note
 ```
@@ -237,13 +240,15 @@ graph TD
         SRC["src/"] --> CORE["TavernVault.Core/"]
         SRC --> APP["TavernVault.App/<br/>bin/Release/net10.0-windows/<br/>TavernVault.exe + wwwroot"]
         TESTS["tests/"] --> UNIT["TavernVault.Core.Tests/<br/>(数量以 dotnet test 输出为准)"]
+        TESTS --> INTG["TavernVault.IntegrationTests/<br/>(进程内 Kestrel + 隔离临时库)"]
+        TESTS --> NODE["preset-model.test.mjs<br/>(Node 纯函数测试)"]
         TESTS --> SMOKE["smoke_api.py<br/>(同数据目录可重复运行)"]
         DOCS["docs/ (本文档套件)"]
     end
 
-    subgraph UserData["数据目录 (默认 %APPDATA%\TavernVault, --data 可覆盖)"]
+    subgraph UserData["数据目录 (默认 %APPDATA%\TavernVault；--data 覆盖；--portable 随程序目录)"]
         SETTINGS["settings.json<br/>(损坏时坏文件留档 .corrupt-*)"]
-        INDEX["index.json (version=3)<br/>+ index.bak 上一版留档"]
+        INDEX["index.json (version=4)<br/>+ index.bak 上一版留档"]
         BACKUPS["backups/ (可自定义位置)<br/>manifest.json 原子写"]
         THUMBS["thumbs/ 缩略图缓存(可删,自动重建)"]
         LOGS["logs/ 按日滚动, 保留 7 天"]
@@ -278,6 +283,18 @@ timeline
     v0.5.2 : 备份Load不丢记录+RelocateTo两阶段 : 编辑器重构(互刷/Esc/409自动重扫)+move备份 : 酒馆护栏测试+错误合同补齐
     v0.5.3 : v0.5.x收尾：UI清单12项实跑(?token=通道) : 奥卡姆剃刀修剪无用代码
     v0.6.0 : 格式对齐：识别13类官方格式+主题字段修正 : 独立世界书容器保形 : 新建文件11类模板(创建即编辑)
+    v0.6.1 : 分类回撤(奥卡姆剃刀) : 新建模板收敛6类 : 首次自包含打包
+    v0.7.0 : 预设可视化三期(拖拽/增删/分组) : preset-model 纯函数+Node测试 : MIT 开源定位
+    v0.7.1 : 酒馆只读托管+导出副本 : 修改历史+数据目录可视化
+    v0.7.2 : 文件监视自动重扫(防抖+轮询) : 冒烟复审
+    v0.7.3 : 收纳入库(散乱目录批量分类进库)
+    v0.7.4 : 集成测试进 dotnet test : GitHub Actions CI
+    v0.7.5 : README 重写 : 文档维护约定
+    v0.7.6 : 内嵌书合入(次版重构为本地追加)
+    v0.7.7 : 便携模式 --portable : 集成测试+2
+    v0.7.8 : 应用图标初版(药瓶意象)
+    v0.7.9 : 图标重设计：明亮简约·翠绿文件夹叠卡
+    v1.0.0 : 首个正式版 : 隐私审计+历史重写脱敏 : 仓库公开+Release
 ```
 
 ## 12. 风险与防护措施对照

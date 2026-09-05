@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-05 · 对应 v0.7.2
+> 最后更新：2026-09-05 · 对应 v0.7.3
 
 ## 一分钟了解
 
@@ -99,6 +99,8 @@ POST /api/items/{id}/delete            # 进回收站
 POST /api/items/{id}/export            # 酒馆源导出副本到第一个局外库根（v0.7.1，局外源 400）
 GET  /api/history                      # 修改历史：应用内改过的文件按最近写入倒序（v0.7.1，上限 100）
 POST /api/reveal                       # {id} 资源管理器定位；{dataDir:true} 打开数据目录（⚠️ 有桌面副作用，冒烟禁用）
+POST /api/collect/preview              # 收纳入库预扫 {source} → 分类分组/文件清单/建议跳过（v0.7.3）
+POST /api/collect                      # 收纳执行 {source,root,files?,move?}：目标须局外库根；默认复制源不动
 ```
 
 ### 库根 / 酒馆

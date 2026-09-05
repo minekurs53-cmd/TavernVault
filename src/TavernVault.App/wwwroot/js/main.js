@@ -2,7 +2,7 @@
 
 import { api, get, post } from './api.js';
 import { $, icon, hydrateIcons, toast, escapeHtml, openModal, confirmDialog } from './util.js';
-import { state, initShell, refreshItems, refreshMeta, renderSidebar, showHistory } from './app.js';
+import { state, initShell, refreshItems, refreshMeta, renderSidebar, showHistory, showCollect } from './app.js';
 
 // ---- 主题 ----
 function initTheme() {
@@ -30,6 +30,9 @@ export async function showSettings() {
       <input type="text" id="set-root-input" placeholder="输入文件夹路径，或点右侧选择">
       <button class="btn" id="set-root-pick"><span class="ico">${icon('folder')}</span>浏览…</button>
       <button class="btn primary" id="set-root-add">添加</button>
+    </div>
+    <div class="add-root-row" style="margin-top:6px">
+      <button class="btn" id="set-collect" style="width:100%">收纳入库（把散乱文件夹按类型批量收进库）</button>
     </div>
     <div class="add-root-row" style="margin-top:6px">
       <button class="btn" id="set-tavern-connect" style="width:100%">接入酒馆（自动检测 SillyTavern / TauriTavern）</button>
@@ -61,6 +64,12 @@ export async function showSettings() {
 
   const mask = openModal(body);
   hydrateIcons(body);
+
+  // 收纳入库入口（v0.7.3）：关闭设置弹窗后打开收纳向导
+  body.querySelector('#set-collect').addEventListener('click', () => {
+    mask.remove();
+    showCollect();
+  });
 
   // 数据目录回显（v0.7.1）：设置/索引/备份/日志都在这里，一键打开
   const dataDirInput = body.querySelector('#set-datadir');

@@ -12,6 +12,7 @@ TV_CONN / TV_BASE / TV_TOKEN 环境变量可覆写。
 - 酒馆托管（v0.7.1 语义）：护栏 403 矩阵（rename/move/PUT×3）/ 导出副本全链路 / 强制备份（rename force）
 - v0.6.0+：新建文件 6 类模板回路；v0.7.1：修改历史聚合与已删过滤 / meta.dataDir
 - v0.7.2：文件监视自动重扫（直接落盘→自动入库/出库）
+- v0.7.3：收纳入库（散乱夹具 → 分类落位/源不动/move/重名序号/四条负向合同）
 - 永不纳入：reveal 的真实调用（会弹桌面资源管理器窗口，见 v0.7.1 事故记录）；前端逻辑
   （由 preset-model node 测试 + 浏览器 UI 实跑覆盖）
 """
@@ -918,6 +919,86 @@ while time.time() < deadline:
         break
     time.sleep(0.4)
 check("删除后自动出库", gone == [], str(gone)[:80])
+
+print("== 收纳入库（v0.7.3）==")
+# 散乱来源夹具（.smoke 下、不是库根——收纳来源无需登记）：混合类型 + 子目录嵌套 + 建议跳过项
+COLLECT_SRC = os.path.abspath(os.path.join(".smoke", "收纳来源"))
+shutil.rmtree(COLLECT_SRC, ignore_errors=True)
+
+
+def collect_write(rel, text):
+    p = os.path.join(COLLECT_SRC, rel)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+collect_write("卡A.json", json.dumps({"spec": "chara_card_v2", "spec_version": "2.0",
+                                      "data": {"name": "收纳卡A", "description": ""}}, ensure_ascii=False))
+collect_write("深层/卡B.json", json.dumps({"spec": "chara_card_v2", "spec_version": "2.0",
+                                           "data": {"name": "收纳卡B", "description": ""}}, ensure_ascii=False))
+collect_write("书A.json", json.dumps({"entries": {}}, ensure_ascii=False))
+collect_write("预设A.json", json.dumps({"name": "P", "prompts": [{"identifier": "main"}],
+                                        "prompt_order": []}, ensure_ascii=False))
+collect_write("美化A.json", json.dumps({"main_text_color": "rgba(0,0,0,1)", "blur_strength": 1}, ensure_ascii=False))
+collect_write("脚本A.js", "console.log(1)")
+collect_write("说明.txt", "hello")
+collect_write("归档.zip", "PK")
+
+preview = call("POST", "/api/collect/preview", {"source": COLLECT_SRC})
+groups = {g["kind"]: g for g in (preview or {}).get("groups", [])}
+check("预扫描六类齐全", set(groups) == {"character", "lorebook", "preset", "theme", "script", "text"}
+      and len(groups["character"]["files"]) == 2,
+      str({k: len(v["files"]) for k, v in groups.items()}))
+check("嵌套相对路径保留", any(f["path"].startswith("深层") for f in groups["character"]["files"]),
+      str(groups["character"]["files"]))
+check("建议跳过归档", any(s["name"] == "归档.zip" for s in (preview or {}).get("skipped", [])),
+      str((preview or {}).get("skipped")))
+
+r = call("POST", "/api/collect", {"source": COLLECT_SRC, "root": TESTDATA})
+check("收纳执行 ok（7 个可收纳）", (r or {}).get("ok") is True and (r or {}).get("copied") == 7, str(r)[:100])
+check("分类落位：角色卡（含嵌套）", os.path.isfile(os.path.join(TESTDATA, "角色卡", "卡A.json"))
+      and os.path.isfile(os.path.join(TESTDATA, "角色卡", "卡B.json")))
+check("分类落位：其余类型", all(os.path.isfile(os.path.join(TESTDATA, d, f)) for d, f in (
+    ("世界书", "书A.json"), ("预设", "预设A.json"), ("美化", "美化A.json"),
+    ("脚本", "脚本A.js"), ("文本", "说明.txt"))))
+check("源目录默认不动", os.path.isfile(os.path.join(COLLECT_SRC, "卡A.json")))
+check("收录条目已入库", call("GET", "/api/items?kind=character&q=" + urllib.parse.quote("收纳卡A")) != [])
+
+r2 = call("POST", "/api/collect", {"source": COLLECT_SRC, "root": TESTDATA})
+check("重名自动加序号", (r2 or {}).get("ok") is True
+      and os.path.isfile(os.path.join(TESTDATA, "角色卡", "卡A (2).json")), str(r2)[:80])
+
+collect_write("移动我.txt", "move-me")
+r3 = call("POST", "/api/collect", {"source": COLLECT_SRC, "root": TESTDATA, "move": True,
+                                   "files": ["移动我.txt"]})
+check("move 模式源文件已删（回收站）", (r3 or {}).get("ok") is True
+      and not os.path.isfile(os.path.join(COLLECT_SRC, "移动我.txt"))
+      and os.path.isfile(os.path.join(TESTDATA, "文本", "移动我.txt")), str(r3)[:100])
+
+code = call_code("POST", "/api/collect", {"source": COLLECT_SRC, "root": TESTDATA, "files": ["不存在.txt"]})
+check("未知文件清单 400", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/collect", {"source": COLLECT_SRC, "root": "D:\\不存在的根\\nope"})
+check("未登记目标根 400", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/collect/preview", {"source": os.path.join(COLLECT_SRC, "不存在")})
+check("来源不存在 400", code == 400, f"HTTP {code}")
+TAVERN_COLLECT = os.path.abspath(os.path.join(".smoke", "收纳酒馆源"))
+os.makedirs(TAVERN_COLLECT, exist_ok=True)
+call("POST", "/api/roots", {"path": TAVERN_COLLECT, "source": "tavernST"})
+code = call_code("POST", "/api/collect", {"source": COLLECT_SRC, "root": TAVERN_COLLECT})
+check("酒馆源目标 400（只读托管）", code == 400, f"HTTP {code}")
+call("DELETE", "/api/roots", {"path": TAVERN_COLLECT})
+
+# 清理：收纳副本进回收站（按目录精确定位），来源目录整体移除
+for d in ("角色卡", "世界书", "预设", "美化", "脚本", "文本"):
+    for row in call("GET", "/api/items?dir=" + urllib.parse.quote(d)):
+        if row.get("fullPath", "").startswith(os.path.abspath(TESTDATA)):
+            call("POST", f"/api/items/{row['id']}/delete", {})
+shutil.rmtree(COLLECT_SRC, ignore_errors=True)
+call("POST", "/api/rescan")
+check("收纳段已清理", not any(i["fileName"].startswith(
+    ("卡A", "卡B", "书A", "预设A", "美化A", "脚本A", "说明", "移动我"))
+    for i in call("GET", "/api/items")))
 
 print("== 错误合同（v0.5.2 回归）==")
 code = call_code("GET", "/api/items/unknownid0000")

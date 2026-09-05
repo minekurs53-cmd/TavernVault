@@ -563,6 +563,122 @@ async function showBackups(item) {
 
 // 修改历史（v0.7.1）：应用内改过的文件，按最近写入倒序——解决"改了文件但忘了文件名"的查找难题。
 // 数据源是备份清单（每次保存/还原/重命名/移动前都会先备份），酒馆侧的直接改动不经应用、不会出现。
+// 收纳入库（v0.7.3）：散乱文件夹 → 内容识别分类预览 → 批量复制进局外库根的类型子目录（源默认不动）。
+// 面向"文件夹摆得没那么井井有条"的场景；压缩包/其他不收纳（报告中建议跳过）。
+export async function showCollect() {
+  const normalRoots = (state.meta?.roots || []).filter((r) => r.source === 'normal');
+  const body = el(`
+    <div>
+      <h3>收纳入库</h3>
+      <p>选一个资源文件夹，按**文件内容**识别类型后批量复制进库的类型子目录（角色卡/世界书/预设/美化/脚本/文本）。默认复制、源目录不动；压缩包与其他类型不收纳。</p>
+      <div class="add-root-row">
+        <input type="text" id="collect-source" placeholder="来源文件夹路径（递归扫描）">
+        <button class="btn" id="collect-pick"><span class="ico">${icon('folder')}</span>浏览…</button>
+        <button class="btn primary" id="collect-scan">扫描预览</button>
+      </div>
+      <div id="collect-preview" style="margin-top:10px"></div>
+      <div class="add-root-row" id="collect-target" hidden style="margin-top:10px">
+        <label style="font-size:12px;color:var(--text-2);flex:none">目标库根</label>
+        <select id="collect-root" style="flex:1"></select>
+        <label class="toggle" style="flex:none"><input type="checkbox" id="collect-move"> 收纳后删除源文件（进回收站）</label>
+      </div>
+      <div class="m-actions">
+        <button class="btn" data-act="close">关闭</button>
+        <button class="btn primary" id="collect-run" disabled>开始收纳</button>
+      </div>
+    </div>`);
+  const mask = openModal(body);
+  hydrateIcons(body);
+
+  const sourceInput = body.querySelector('#collect-source');
+  const previewBox = body.querySelector('#collect-preview');
+  const targetRow = body.querySelector('#collect-target');
+  const rootSel = body.querySelector('#collect-root');
+  const runBtn = body.querySelector('#collect-run');
+
+  if (!normalRoots.length) {
+    previewBox.appendChild(el('<div class="empty" style="padding:10px">还没有局外存储库根——请先在库设置中添加一个普通库目录作为收纳目标</div>'));
+    body.querySelector('#collect-scan').disabled = true;
+  } else {
+    rootSel.innerHTML = normalRoots
+      .map((r) => `<option value="${escapeHtml(r.path)}">${escapeHtml(r.path)}</option>`)
+      .join('');
+  }
+
+  body.querySelector('#collect-pick').addEventListener('click', async () => {
+    try {
+      const r = await api.pickFolder();
+      if (r?.path) sourceInput.value = r.path;
+    } catch (e) { toast(e.message, 'err'); }
+  });
+  body.querySelector('#collect-scan').addEventListener('click', doScan);
+  sourceInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doScan(); });
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('[data-act=close]')) mask.remove();
+  });
+
+  async function doScan() {
+    const source = sourceInput.value.trim();
+    if (!source) return;
+    previewBox.innerHTML = '<div class="empty" style="padding:10px">扫描中…</div>';
+    let r;
+    try { r = await api.collectPreview(source); }
+    catch (e) { previewBox.innerHTML = ''; toast(e.message, 'err'); return; }
+    targetRow.hidden = false;
+    renderPreview(r);
+  }
+
+  function renderPreview({ groups, skipped }) {
+    previewBox.innerHTML = '';
+    if (!groups.length && !skipped.length) {
+      previewBox.appendChild(el('<div class="empty" style="padding:10px">没有找到任何文件</div>'));
+      return;
+    }
+    for (const g of groups) {
+      const group = el(`<div class="collect-group">
+        <div class="cg-head"><label class="toggle"><input type="checkbox" checked data-group>
+          ${escapeHtml(g.label)}（${g.files.length}）→ ${escapeHtml(g.subdir)}/</label></div>
+        <div class="cg-files"></div>
+      </div>`);
+      const files = group.querySelector('.cg-files');
+      for (const f of g.files) {
+        const row = el(`<label class="collect-file"><input type="checkbox" checked data-path="${escapeHtml(f.path)}">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(f.path)}">${escapeHtml(f.path)}</span>
+          <span style="margin-left:auto;flex:none">${fmtSize(f.size)}</span></label>`);
+        files.appendChild(row);
+      }
+      group.querySelector('[data-group]').addEventListener('change', (e) => {
+        group.querySelectorAll('[data-path]').forEach((cb) => { cb.checked = e.target.checked; });
+      });
+      previewBox.appendChild(group);
+    }
+    if (skipped.length) {
+      previewBox.appendChild(el(`<div class="empty" style="padding:6px;text-align:left">
+        建议跳过（压缩包/其他）：${escapeHtml(skipped.map((s) => s.name).join('、'))}</div>`));
+    }
+    runBtn.disabled = false;
+  }
+
+  runBtn.addEventListener('click', async () => {
+    const files = [...previewBox.querySelectorAll('[data-path]:checked')].map((cb) => cb.dataset.path);
+    if (!files.length) { toast('请至少勾选一个文件', 'err'); return; }
+    runBtn.disabled = true;
+    try {
+      const r = await api.collectExecute(sourceInput.value.trim(), rootSel.value, files,
+        body.querySelector('#collect-move').checked);
+      if (r.warnings?.length) toast(r.warnings.join('；'), 'err');
+      const failed = r.report.filter((x) => x.status === 'failed');
+      toast(`收纳完成：${r.copied}/${r.total}${failed.length ? `，失败 ${failed.length}` : ''}`);
+      previewBox.innerHTML = `<div class="empty" style="padding:8px;text-align:left">${
+        r.report.map((x) => `${x.status === 'failed' ? '❌' : '✅'} ${escapeHtml(x.file)} → ${escapeHtml(x.dest || x.error || '')}`)
+          .join('<br>')}</div>`;
+      await refreshMeta();
+      await refreshItems();
+    } catch (e) { toast(e.message, 'err'); }
+    runBtn.disabled = false;
+  });
+}
+
 export async function showHistory() {
   let rows = [];
   try {

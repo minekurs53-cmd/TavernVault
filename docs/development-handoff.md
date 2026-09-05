@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.7.8** · 最后更新：2026-09-05
+> 当前版本：**v1.0.0** · 最后更新：2026-09-05
 
 ---
 
@@ -435,6 +435,20 @@ v0.5.2 依据 `docs/full-audit-v0.5.0.md` 路线图完成备份可靠性、编�
 - **踩坑**：CORK 元组曾几何(5 元)与颜色混用——作为 fill 传入时 Pillow 报"color must be int or
   tuple of one/three/four"；颜色常量与几何常量必须分离。
 
+### 3.25 v0.7.9：图标重设计——明亮简约·翠绿文件夹叠卡
+
+用户反馈 v0.7.8 暗色药瓶风偏丑，指名"明亮的简约风格"。流程沉淀为两步工具链：
+
+- **候选筛选用 `tools/icon_candidates.py`**：一次产出 10 个候选（同一明亮瓷片 + 扁平几何语言，
+  意象覆盖 馆字标/宝箱/文件夹/卡片/书堆/盾牌/收纳格/药瓶/保险库/酒杯），每候选深浅双底大图 +
+  32px 退化对比图，供挑选。用户选定 3 号文件夹，追加三点：①配色改**有层次的翠绿**；②文件夹里
+  加东西；③复合 4 号的**卡片叠层**效果。
+- **定稿**（`tools/gen_icon.py` 整体重写）：浅灰白瓷片 + 翠绿四层阶——深 `#0ca678` 后板/标签耳 →
+  主 `#10b981` 前板 → 白前卡 → 浅绿 `#a7f3d0` 后卡，双卡上下错位探出夹口。SVG 仅为 rect 组合
+  （不再需要药瓶版的 clipPath 技巧）。小尺寸简化档 ≤48 省略后卡与文本行，16px 只留文件夹剪影。
+- **踩坑**：卡片文本行下端曾被前板裁切（看起来像缺口），整体上移至前板以上——**叠层几何各元素
+  的可见边界要按遮挡关系预留余量**。
+
 ### 3.21 v0.7.4：API 集成测试进 dotnet test + GitHub Actions CI
 
 §11 复审"开源前工程底线"项落地，摆脱"手工起服务再跑冒烟脚本"两步走：
@@ -572,7 +586,7 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 2. **`dotnet build` 增量构建偶发不拷贝 wwwroot**。已在 `TavernVault.App.csproj` 加 `CopyFrontendFiles` Target（AfterTargets=Build，按时间戳强制同步）。若仍怀疑前端没更新，直接对比 `bin/.../wwwroot` 与 `src/.../wwwroot` 的时间戳/大小。
 3. **仓库体积会悄悄增长**：窗口模式运行时 WebView2 把浏览器缓存写在 `bin/.../TavernVault.exe.WebView2\`（曾积累 69M）。该目录可随时整体删除（自动重建）；`--server` 无窗口模式不产生。
 4. **前端语法校验必须用 `.mjs`**：`node --check x.js` 按 script 模式，抓不到模块级错误（如非 async 函数里用 await、重复 import）。正确做法：`cp x.js /tmp/x.mjs && node --check /tmp/x.mjs`。
-5. **GitHub 直连失败**（国内网络）：本仓库已配置 `git config http.proxy http://127.0.0.1:(端口)`（用户系统代理）。推送前若报 `Failed to connect to github.com`，确认代理在监听 (端口)。
+5. **GitHub 直连失败**（国内网络）：本仓库配置了指向本地代理的 `git config http.proxy`（端口属个人网络配置，不写入仓库）。推送前若报 `Failed to connect to github.com`，确认本地代理在运行。
 
 ---
 
@@ -621,13 +635,17 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 | v0.7.6 | 内嵌书合入 | 详见 §3.22。独立世界书一键追加进卡片内嵌书（服务端实现，次版重构） |
 | v0.7.7 | 合入本地追加 + 便携模式 | 详见 §3.23。合入重构为编辑会话内本地追加（用户反馈：缺确认/直接落盘）；--portable 便携模式；集成 +2=16 |
 | v0.7.8 | 应用图标 | 详见 §3.24。`tools/gen_icon.py` 单一几何源 → ico(7 档)/favicon.svg/png 三资产；exe+窗口+网页三处接线；README 头图 |
+| v0.7.9 | 图标重设计 | 详见 §3.25。10 候选工具化（`tools/icon_candidates.py`）→ 用户选定文件夹+叠卡；明亮简约·翠绿四层阶；gen_icon.py 重写三资产再生 |
+| v1.0.0 | **首个正式版 + 发布门禁** | 隐私全量审计（gitleaks 全历史零泄露 + cookie/凭据/局域网 IP 专项零命中 + 仓库设置核清）；git filter-repo 历史重写（代理端口泛化 + 作者名归一，blob 级校验）+ 双分支 force push；版本号升至 1.0.0；GitHub Release 挂自包含包（发布前以 dist 产物实跑全量冒烟 207）；仓库转公开；README 末尾新增「项目自评：优点与不足」 |
 
 ### 9.2 当前状态（截至 2026-09-05）
 
-- 分支 `qoder/TavernVault`；v0.7.6/v0.7.7 已推送（`031a00d`/`9e30e42`），v0.7.8 待推送。
+- 分支 `qoder/TavernVault`；**v1.0.0 已发布**（Release 挂自包含包）且仓库已转公开。全历史已经
+  filter-repo 重写 + force push（门禁脱敏，见 §11）。**注意：外部协作者/其他克隆需重新 clone，
+  旧 SHA 全部失效。**
 - **项目已进入真实使用阶段**（用户自用 ST/TT 各 70+ 资源）：需求与优先级以真实使用反馈为准。
 - 验证情况：Release 构建 0 警告 0 错误；单测 93/93 + preset-model 18/18 + 集成 16/16；冒烟 207 全绿；
-  图标三资产生成并接线（exe/窗口/favicon/README 四处生效）。
+  图标 v2（明亮简约·翠绿文件夹叠卡）三资产生成并接线（exe/窗口/favicon/README 四处生效）。
 - 已知边界（实测）：修改历史只覆盖应用内写入（酒馆侧直接改动不产生记录）；收纳来源夹具若含无法
   识别的二进制会进"建议跳过"；AutoWatch 无 UI 开关（settings.json 可改）。
 
@@ -663,10 +681,17 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 
 ### v1.0.0 发布门禁（新增，开放仓库前逐项执行，全过才改 public）
 
-- [ ] **隐私全量检查**：`git grep` 真实路径/用户名/令牌模式（`D:\agent`、`C:\Users\<真实用户>`、
-  `sk-` 开头的 API key、私钥块、`(端口)` 代理端口、server-connection 内容）+ `git log --all -p`
-  全历史扫描 + Issues/PR/Actions 日志核对。v0.7.5 预扫结果：工作区零命中（docs 两处"路径"为
-  安全分析示例与测试夹具，历史零密钥）；远程侧（分支/PR/日志）待查。
+- [x] **隐私全量检查**：`git grep` 真实路径/用户名/令牌模式（`D:\agent`、`C:\Users\<真实用户>`、
+  `sk-` 开头的 API key、私钥块、本地代理端口号、server-connection 内容）+ `git log --all -p`
+  全历史扫描 + Issues/PR/Actions 日志核对。**v1.0.0 门禁执行完毕（2026-09-05，工具链：gitleaks 8.28 +
+  privacy-review/open-source-checker 技能清单）**：gitleaks 全历史零泄露；cookie/会话/JWT/凭据头/
+  局域网 IP 模式全历史零命中；机器路径仅测试攻击夹具；提交邮箱全 noreply。遗留两处弱标识
+  （本地代理端口：历史 docs 117 处 + 1 条提交信息；v0.1–v0.2 两提交作者名为 Windows 账户名）已经
+  **git filter-repo 重写清除并双分支 force push**（替换后变空的 2 条提交按空提交规则裁剪；
+  main/分支树经 blob 级比对仅文档端口行变化、二进制资产逐字节一致）。**已知残留**：GitHub 服务端
+  `refs/pull/*` 仍缓存重写前提交（可按旧 SHA 访问至 GitHub 回收；仅弱标识无密钥，彻底清除=删库重建）。
+  本机凭据面：git credential=manager（Windows 凭据管理器）、gh 令牌在 keyring、无明文
+  .git-credentials；WebView2 用户数据目录在 %LOCALAPPDATA%，从未入库。
 - [ ] **仓库设置**：可见性切 public 前核对协作者列表、deploy key、webhook；确认 LICENSE 与
   README 徽章/链接公开后可达。
 - [ ] **发布物**：GitHub Release 挂 dist 自包含包 + 更新说明。
@@ -713,7 +738,7 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 - [ ] 前端改动后用 `.mjs` 方式 `node --check` 全部 5 个 js（api/app/editor/main/util）
 - [ ] 改动 Core 后跑 `dotnet test`；改动 API 后跑 `smoke_api.py`（临时 data 目录，**注意 Git Bash 下 `--data` 用相对路径**）
 - [ ] UI 改动用浏览器截图核对，读 `window.__errs` 确认无模块错误
-- [ ] 提交前 `git status` 确认分支（`qoder/TavernVault`）；推送走代理 (端口)
+- [ ] 提交前 `git status` 确认分支（`qoder/TavernVault`）；推送走本地代理
 - [ ] 任何写操作只在 `testdata/` 临时目录验证，真实库只读
 - [ ] 改动条目模型（`LibraryItem`）记得 `IndexVersion` +1，否则旧索引增量复用会缺新字段
 

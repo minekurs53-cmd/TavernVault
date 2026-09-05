@@ -13,7 +13,6 @@ TV_CONN / TV_BASE / TV_TOKEN 环境变量可覆写。
 - v0.6.0+：新建文件 6 类模板回路；v0.7.1：修改历史聚合与已删过滤 / meta.dataDir
 - v0.7.2：文件监视自动重扫（直接落盘→自动入库/出库）
 - v0.7.3：收纳入库（散乱夹具 → 分类落位/源不动/move/重名序号/四条负向合同）
-- v0.7.6：内嵌世界书合入（ST/Spec 来源追加规范化/来源不动/酒馆卡 403）
 - 永不纳入：reveal 的真实调用（会弹桌面资源管理器窗口，见 v0.7.1 事故记录）；前端逻辑
   （由 preset-model node 测试 + 浏览器 UI 实跑覆盖）
 """
@@ -228,61 +227,8 @@ e0 = book["entries"][0]
 check("Spec→ST 转换", e0["data"]["key"] == ["内置词"] and e0["data"]["order"] == 50 and e0["data"]["position"] == 0)
 check("raw 原条目回传", e0["raw"] is not None and e0["raw"].get("selective") is True)
 
-print("== 内嵌世界书合入（v0.7.6）==")
-# 独立书（1 条 ST + 1 条 Spec 数组）→ 专用目标卡内嵌书：追加、规范化、来源不动。
-# 用独立目标卡：导入的备份会占用该卡保留份数，不能挤转测试卡的备份历史（备份还原段按最早备份断言）。
-imp_book = {"name": "合入来源", "entries": [
-    {"key": ["合入词"], "content": "ST来源内容", "comment": "合入条目",
-     "disable": False, "order": 5, "position": 0},
-]}
-imp_spec = {"name": "合入来源Spec", "entries": [
-    {"keys": ["Spec合入词"], "content": "Spec来源内容", "enabled": False,
-     "insertion_order": 9, "id": 3, "extensions": {}},
-]}
-with open(os.path.join(TESTDATA, "合入来源.json"), "w", encoding="utf-8") as f:
-    json.dump(imp_book, f, ensure_ascii=False)
-imp_card = {"spec": "chara_card_v2", "spec_version": "2.0", "data": {
-    "name": "合入目标卡", "description": "",
-    "character_book": {"name": "内嵌", "entries": {"0": {
-        "key": ["已有词"], "content": "已有内容", "comment": "已有条目",
-        "disable": False, "order": 1, "position": 0}}}}}
-with open(os.path.join(TESTDATA, "合入目标卡.json"), "w", encoding="utf-8") as f:
-    json.dump(imp_card, f, ensure_ascii=False)
-call("POST", "/api/rescan")
-imp_id = call("GET", "/api/items?kind=lorebook&q=" + urllib.parse.quote("合入来源"))[0]["id"]
-imp_card_id = call("GET", "/api/items?kind=character&q=" + urllib.parse.quote("合入目标卡"))[0]["id"]
-
-book_before = call("GET", f"/api/cards/{imp_card_id}/book")
-n_before = len(book_before["entries"])
-r = call("POST", f"/api/cards/{imp_card_id}/book/import", {"sourceId": imp_id})
-check("合入 ST 来源 ok+计数", (r or {}).get("ok") is True and (r or {}).get("added") == 1
-      and (r or {}).get("total") == n_before + 1, str(r)[:100])
-book_after = call("GET", f"/api/cards/{imp_card_id}/book")
-check("合入条目在内嵌书尾部", book_after["entries"][-1]["data"]["content"] == "ST来源内容"
-      and book_after["entries"][0]["data"]["content"] == "已有内容")  # 已有条目仍在
-
-# Spec 数组来源规范化进同容器（enabled→disable 等），再合一次
-with open(os.path.join(TESTDATA, "合入来源.json"), "w", encoding="utf-8") as f:
-    json.dump(imp_spec, f, ensure_ascii=False)
-call("POST", "/api/rescan")
-r = call("POST", f"/api/cards/{imp_card_id}/book/import", {"sourceId": imp_id})
-check("合入 Spec 来源 ok", (r or {}).get("ok") is True and (r or {}).get("added") == 1, str(r)[:80])
-book_after2 = call("GET", f"/api/cards/{imp_card_id}/book")
-last = book_after2["entries"][-1]["data"]
-check("Spec 条目规范化", last.get("disable") is True and last.get("content") == "Spec来源内容"
-      and "enabled" not in last, str(last)[:100])
-check("来源文件未被修改",
-      json.load(open(os.path.join(TESTDATA, "合入来源.json"), encoding="utf-8")) == imp_spec)
-
-# 负向：来源不是世界书 / 来源不存在
-code = call_code("POST", f"/api/cards/{imp_card_id}/book/import", {"sourceId": "unknownid0000"})
-check("合入未知来源 404/400", code in (400, 404), f"HTTP {code}")
-# 清理：删除来源夹具（内嵌书改动留在测试卡上，属预期）
-for q in ("合入来源", "合入目标卡"):
-    for row in call("GET", "/api/items?q=" + urllib.parse.quote(q)):
-        call("POST", f"/api/items/{row['id']}/delete", {})
-call("POST", "/api/rescan")
 # 编辑：改内容并禁用，raw 原样回传
+call("POST", "/api/rescan")
 e0["data"]["content"] = "编辑后的内置内容"
 e0["data"]["disable"] = True
 r = call("PUT", f"/api/cards/{card_items[0]['id']}/book", {"entries": book["entries"]})
@@ -577,8 +523,6 @@ lore_cur = call("GET", f"/api/lore/{tlore_id}")
 code = call_code("PUT", f"/api/lore/{tlore_id}", {"entries": lore_cur.get("entries") or [],
                                                   "container": lore_cur.get("container") or "object"})
 check("酒馆源 lore PUT 403", code == 403, f"HTTP {code}")
-code = call_code("POST", f"/api/cards/{tcard_id}/book/import", {"sourceId": tlore_id})
-check("酒馆卡内嵌书合入 403", code == 403, f"HTTP {code}")
 check("403 未写入文件", call("GET", f"/api/cards/{tcard_id}")["card"]["data"].get("description") == card_desc_before,
       str(card_desc_before)[:60])
 

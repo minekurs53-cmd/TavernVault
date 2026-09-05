@@ -100,10 +100,15 @@ public static class ApiServer
     /// 结果固定为绝对路径（启动时冻结，不随进程工作目录漂移）。
     /// App 启动期的单实例 Mutex 名也要用它，必须与 SettingsStore 的默认值保持同一来源。
     /// </summary>
-    public static string ResolveDataDir(string[] args) =>
-        Array.Find(args, a => a.StartsWith("--data=")) is { } d && d[7..].Trim().Length > 0
-            ? Path.GetFullPath(d[7..])
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TavernVault");
+    /// <summary>数据目录解析优先级：显式 --data= &gt; --portable（程序目录\data，拷贝即用） &gt; %APPDATA%。</summary>
+    public static string ResolveDataDir(string[] args)
+    {
+        if (Array.Find(args, a => a.StartsWith("--data=")) is { } d && d[7..].Trim().Length > 0)
+            return Path.GetFullPath(d[7..]);
+        if (args.Contains("--portable"))
+            return Path.Combine(AppContext.BaseDirectory, "data"); // v0.7.7 便携模式
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TavernVault");
+    }
 
     private static string ValidateToken(string token)
     {
@@ -555,46 +560,6 @@ public static class ApiServer
             }
             AppLog.Info($"收纳入库：{full} → {root.Path}，复制 {copied}/{picked.Count}（move={move}）");
             return Json(new { ok = true, copied, total = picked.Count, warnings, report });
-        }));
-
-        // ---------- 内嵌世界书合入（v0.7.6） ----------
-        // 把独立世界书的条目规范化为 ST 格式后追加进卡片内嵌书（AppendBook：已有条目保形、键顺延）。
-        // 写路径与内嵌书保存同护栏：酒馆源 403、写前备份、PNG 双块重写。
-        app.MapPost("/api/cards/{id}/book/import", async (HttpContext ctx, string id, HttpRequest req) => await HandleAsync(ctx, async () =>
-        {
-            var item = vault.Find(id);
-            if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
-            if (TavernEditGuard(item) is { } guard) return guard;
-            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
-            var src = vault.Find(body?["sourceId"]?.GetValue<string>() ?? "");
-            if (src is null || src.Kind != ItemKind.Lorebook) return Err("来源条目不是世界书", 400);
-            if (string.Equals(src.FullPath, item.FullPath, StringComparison.OrdinalIgnoreCase))
-                return Err("来源与目标是同一个文件", 400);
-
-            var card = CharacterCardFile.Load(item.FullPath) as JsonObject;
-            if (card is null) return Err("无法解析角色卡", 400);
-            var data = CharacterCardFile.GetDataNode(card);
-            if (CharacterBook.FindBook(data) is null)
-                data["character_book"] = CharacterBook.CreateBook();
-            var book = CharacterBook.FindBook(data)!;
-
-            var sourceRoot = JsonNode.Parse(File.ReadAllText(src.FullPath)) as JsonObject;
-            if (sourceRoot is null) return Err("来源世界书不是合法 JSON", 400);
-            var added = CharacterBook.AppendBook(book, sourceRoot);
-
-            var warnings = new List<string>();
-            AddWarnings(warnings, vault.BackupBeforeWrite(item.FullPath));
-            CharacterCardFile.Save(item.FullPath, card);
-            vault.UpsertItem(item.FullPath);
-            AppLog.Info($"内嵌书合入：{src.FileName} → {item.FileName}，追加 {added} 条");
-            return Json(new
-            {
-                ok = true,
-                added,
-                total = CharacterBook.CountEntries(book),
-                modifiedAt = File.GetLastWriteTime(item.FullPath),
-                warnings,
-            });
         }));
 
         // ---------- 新建文件（v0.6.0） ----------

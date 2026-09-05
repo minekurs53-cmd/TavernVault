@@ -4,7 +4,7 @@
 
 ![.NET](https://img.shields.io/badge/.NET-10-blue) ![平台](https://img.shields.io/badge/平台-Windows%2010%2F11-lightgrey) ![协议](https://img.shields.io/badge/协议-MIT-green) [![CI](https://github.com/minekurs53-cmd/TavernVault/actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 
-> **关于本项目**：这是一个**个人学习项目**，用于练习桌面应用的搭建与管理（架构、迭代、测试、安全、打包分发）。功能随自用需求推进，暂不接受功能需求；仓库计划开放，欢迎交流与借鉴。
+> **关于本项目**：这是一个**个人学习项目**，用于练习桌面应用的搭建与管理（架构、迭代、测试、安全、打包分发）。功能随自用需求推进，想提需求也可以提（应该没有）；仓库已开放，欢迎交流，借鉴，提出改进建议。
 
 ## 它解决什么问题
 

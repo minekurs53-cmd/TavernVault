@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-05 · 对应 v0.6.1
+> 最后更新：2026-09-05 · 对应 v0.7.0
 
 ## 一分钟了解
 
@@ -32,7 +32,8 @@ dotnet test TavernVault.slnx -c Release    # 单元测试（数量以输出为�
 PYTHONIOENCODING=utf-8 python tests/smoke_api.py
 
 # 前端语法检查（必须 .mjs，否则抓不到模块级错误）
-for f in api app editor main util; do cp src/TavernVault.App/wwwroot/js/$f.js /tmp/$f.mjs && node --check /tmp/$f.mjs && echo "$f OK"; done
+for f in api app editor main preset-model util; do cp src/TavernVault.App/wwwroot/js/$f.js /tmp/$f.mjs && node --check /tmp/$f.mjs && echo "$f OK"; done
+node tests/preset-model.test.mjs           # 预设写回纯函数测试（无框架）
 ```
 
 ⚠️ Git Bash 陷阱：`--data=` 的绝对路径反斜杠会被吞，**用相对路径或正斜杠**。
@@ -131,6 +132,7 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 |---|---|
 | 预设启用字段 | `prompt_order[].order[].enabled`，**不是 `enable`** |
 | 系统管理提示词 | `prompts[].system_prompt === true`，内容只读防误删 |
+| 预设结构增删/排序 | 一律走 `preset-model.js` 纯函数（prompts 与所有分组 order 双数组一致性、系统项拒删、漏传补回已在其内兜底） |
 | 内嵌书条目双格式 | Spec V2(`keys/enabled/insertion_order`) ↔ ST(`key/disable/order/position 0-6`)；读转 ST、写保形合并，`Raw` 原样回传 |
 | entries 容器形态 | 数组/对象**不能互换**；v0.6.0 起 /api/lore 按容器保形（GET 回传 container，PUT 按容器写回） |
 | PNG 卡 | 保存必须一次重写 chara+ccv3 两个块（`WriteTexts`） |

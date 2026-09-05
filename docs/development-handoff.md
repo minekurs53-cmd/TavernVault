@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.6.1** · 最后更新：2026-09-05
+> 当前版本：**v0.7.0** · 最后更新：2026-09-05
 
 ---
 
@@ -75,7 +75,7 @@ Core：
 - `Models/LibraryItem.cs` — 索引条目模型（含 `RootSource`、用户数据）
 - `Scanning/LibraryScanner.cs` — 递归扫描 + **增量复用**（路径+大小+修改时间不变则复用旧条目）+ 点目录过滤
 - `Storage/Vault.cs` — 内存索引 + 查询 + 用户数据快照迁移 + `BackupBeforeWrite` + `SetBackupRoot`
-- `Storage/SettingsStore.cs` — 设置/索引持久化（索引带 `version` 门控，当前版本 3）
+- `Storage/SettingsStore.cs` — 设置/索引持久化（索引带 `version` 门控，当前版本 4）
 - `Storage/BackupStore.cs` — 文件级备份（manifest.json、按文件保留份数、还原前再备份、`RelocateTo` 迁移）
 - `FileOps/FileOperations.cs` — 重命名/移动/回收站/路径防护/`GetSaveAsPath` 自动命名
 
@@ -88,7 +88,8 @@ App：
 - `Services/FolderPicker.cs` — 原生文件夹选择框（无窗口模式下禁用）
 - `wwwroot/js/main.js` — 入口（主题/启动/设置弹窗/版本号）
 - `wwwroot/js/app.js` — 主界面（侧栏类型+**库分组选项卡**/网格/列表/抽屉/备份弹窗）
-- `wwwroot/js/editor.js` — 编辑器（角色卡表单+原始JSON、世界书条目、内嵌书、预设可视化、原文）
+- `wwwroot/js/editor.js` — 编辑器（角色卡表单+原始JSON、世界书条目、内嵌书、预设可视化三期、原文）
+- `wwwroot/js/preset-model.js` — 预设可视化纯函数（分组选择/重排/增删写回，无 DOM，Node 可单测；旁边的 package.json 仅声明 ESM 供 Node 识别）
 - `wwwroot/js/api.js` — fetch 封装（`get/post/put/del` 独立导出 + `api` 对象）
 - `wwwroot/js/util.js` — 通用工具函数
 
@@ -275,6 +276,29 @@ v0.5.2 依据 `docs/full-audit-v0.5.0.md` 路线图完成备份可靠性、编�
   （识别夹具改断言回落、create 段收敛 6 类、新增"采样字段+prompts 恒判预设"与"kind=textgen 400"两条回归），
   同数据目录连跑两轮全绿。前端 5 个 js `node --check` 通过。
 
+### 3.17 v0.7.0：预设可视化三期 + 学习项目开源定位
+
+- **预设可视化三期**（编辑能力补全，见 §11 立项计划）：
+  - **写回逻辑抽纯函数**：新模块 `wwwroot/js/preset-model.js`——`pickGroup`（精确 character_id → 默认 100001 →
+    首组）、`reorderGroup`（只重排 order 数组、沿用原对象引用，UI 漏传的项按原次序补回末尾防丢）、
+    `addPrompt`（prompts + 当前分组 order 双写，uuid identifier 防冲突）、`removePrompt`（prompts 与**所有**分组
+    order 同步移除，`marker/system_prompt` 系统项拒删）。无 DOM 依赖，Node 直接 import 单测
+    （`tests/preset-model.test.mjs` 18 项；`wwwroot/js/package.json` 仅声明 ESM 供 Node 识别）。
+  - **editor.js 接入**：生效顺序列表加 HTML5 拖拽（dragover 按上下半区计算插入位、drop 写回当前分组）、
+    行尾删除按钮（系统项禁用 + 确认弹窗）、工具栏「新增提示词」内联表单（名称/角色/内容，创建后自动选中新行
+    进详情编辑）、多分组下拉切换（仅 >1 组时显示；未排序清单随分组联动）。顺带修复既有 bug：
+    行模板误写 `o.enable`（正确字段 `enabled`，quick-reference 数据格式坑第 1 条正是它），此前所有行初始都带
+    置灰 `.off`。
+  - **UI 实跑验收**（IAB 浏览器 + 合成 DragEvent，夹具双分组 6 提示词）：拖拽重排 DOM 次序与插入指示 ✓、
+    分组切换联动 ✓、新增（uuid/追加/自动选中/统计更新）✓、删除（确认弹窗/两数组同步消失）✓、
+    保存后磁盘文件逐项核对（重排/新增/删除/另一分组未动）✓。
+- **列表视图类型徽标纵向成列**：`.kind-chip` 定宽 58px 居中、`.r-meta` 定宽 138px 右对齐 + tabular-nums——
+  大小文本宽度差（"10.2 KB"/"824.6 KB"）不再把徽标列顶得左右锯齿。
+- **开源定位**：README 声明个人学习项目（项目搭建与管理工程实践）；选定 **MIT** 协议（根目录 `LICENSE`，
+  徽章 + 许可证节）——学习项目首选宽松协议，比 Apache-2.0 少专利条款复杂度。
+- **测试**：单测 90（无变化）+ preset-model Node 测试 18 项；冒烟 168 × 2 轮全绿；前端 6 个 js `node --check`
+  （.mjs 拷贝方式）通过；浏览器 UI 端到端实跑一轮全过。
+
 ---
 
 ## 4. REST API 参考
@@ -422,15 +446,16 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 | v0.5.1 | **安全与可靠性加固（依据 docs/full-audit-v0.5.0.md）** | 详见 §3.11。P0：预设可视化 XSS（role 未转义）。P1：扫描跳过 junction、内嵌书导出文件名清洗、settings.json 损坏防护（+index.bak）、还原满上限自逐出（原子写回）、缩略图随数据目录。N1/N2/N3 既有项收尾；冒烟同目录可重复成为验收标准 |
 | v0.6.0 | **格式对齐 + 新建文件（新功能迭代）** | 详见 §3.15。ItemKind 13 类（5 个官方新类型 + ThemeKeys 修正 + Subdirs 11 项）；独立世界书容器保形（Spec V2/NovelAI 数组格式读改写不再损坏）；新建文件（11 类官方模板 + create 端点 + topbar 入口，创建即编辑）；单测 100、冒烟 191 |
 | v0.6.1 | **分类回撤 + 首次打包** | 详见 §3.16。侧栏 5 类官方模板分类回撤（奥卡姆剃刀：无专属编辑能力 + textgen 规则误收预设文件），文件回落"文本/脚本"、新建模板收敛 6 类、酒馆接入目录回撤 5 分区；索引 3→4 冷升级（收藏/标签快照回填）；自包含单文件打包（153MB，实跑验证）；单测 90、冒烟 168×2 轮 |
+| v0.7.0 | **预设可视化三期 + 开源定位** | 详见 §3.17。拖拽排序/新增·删除提示词/角色分组切换（写回抽 preset-model.js 纯函数 + Node 测试 18 项）；修复生效顺序行 `o.enable` 既有置灰 bug；列表视图类型徽标纵向成列；README 声明学习项目 + MIT 协议；浏览器 UI 端到端实跑（合成拖拽 + 落盘核对） |
 | v0.5.3 | **v0.5.x 收尾** | UI 清单实跑 12 项全过（index.html 加 `?token=` 回退供外部浏览器冒烟；顺带修复内联脚本语法错误）；奥卡姆剃刀修剪无用代码（2 个旧重载、WriteText 包装、debounce、Console.WriteLine、2 份被取代的评审文档） |
 | v0.5.2 | **可靠性收尾 + 编辑器重构 + 测试补齐（full-audit §8 路线）** | 详见 §3.12。备份：Load 保留幽灵记录 + LoadWarning、RelocateTo 两阶段迁移；move 补写前备份（N4）；编辑器：Tab AbortController + 保存双视图互刷 + Esc 栈顶让位（两条静默数据丢失链切断）+ 409 自动重扫（N5）；App：9 端点异常收编、请求体上限 21MB、WebView2 UDF 搬家 + 导航拦截；测试：TavernGuardTests 6 项 + 冒烟酒馆护栏/错误合同两段，删除 Unit1 空壳 |
 
 ### 9.2 当前状态（截至 2026-09-05）
 
-- 分支 `qoder/TavernVault`；v0.6.1 开发完成（回撤 5 类官方模板分类 + 首次打包 + 文档收口）。
-- 验证情况：Release 构建 0 警告 0 错误；单元测试 90/90 全绿；冒烟 **168 项 × 同一数据目录 2 轮全绿**（识别回落/新建收敛/误收回归三段重写）；前端 5 个 js `node --check` 通过。
-- 打包：`dist/TavernVault-win-x64/`（自包含单文件 exe ≈153 MB + wwwroot，已入 .gitignore）；打包产物以 `--server` 模式实跑，`/api/meta` 返回 0.6.1.0 且 kinds 为回撤后 8 类。
-- 下一迭代主菜：**预设可视化三期**（拖拽排序 / 新增·删除提示词 / 角色分组切换），开发计划已立项于 §11 近期方向 1 与 README「后续方向」。
+- 分支 `qoder/TavernVault`；v0.6.1 已推送 origin（`12b01ee`），v0.7.0 开发完成（预设可视化三期 + 开源定位）。
+- 验证情况：Release 构建 0 警告 0 错误；单测 90/90 + preset-model Node 测试 18/18；冒烟 **168 项 × 2 轮全绿**；
+  前端 6 个 js `node --check` 通过；预设编辑器浏览器端到端实跑（拖拽/增删/分组/保存落盘核对）全过。
+- 下一迭代候选：内嵌世界书合入、酒馆接入增强（断链提示）、API 集成测试进 dotnet test（见 §11）。
 
 ### 9.3 Git 信息
 
@@ -457,14 +482,9 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 - [x] 浏览器 UI 清单跑一轮（v0.5.3 完成，12 项全过，见 §3.13）
 - [x] 发布/分发（v0.6.1 完成：自包含单文件打包 + 实跑验证，见 §3.16；升级数据迁移由索引版本门控与设置损坏防护覆盖）
 
-### 近期方向（v0.6.x → v0.7）
+### 近期方向（v0.7.x → v0.8）
 
-1. **预设可视化三期（已立项，下一迭代主菜）**——现状：可视化视图已支持采样参数编辑、生效顺序勾选启停、提示词详情编辑（v0.3.1 二期），但**顺序不可调整、条目不可增删**。开发计划：
-   - **拖拽排序**：生效顺序列表（`editor.js buildOrderCard` 的 `.preset-row`）加 HTML5 拖拽（`draggable` + `dragover` 重排 + 视觉占位），松手即按新行序写回当前分组 `order[]`——只重排数组次序，不动 `enabled` 与 `prompts[]` 本体；随后 `touch()` 走既有 dirty→保存→双视图互刷链（v0.5.2 机制），原文视图同步可见。
-   - **新增提示词**：表单（名称/角色/内容）→ 生成 identifier（uuid），同时写入 `prompts[]` 与当前分组 `order[]` 末尾（`enabled:true`）；成功后重渲染并在详情卡打开新条目。
-   - **删除提示词**：从 `prompts[]` 与**所有** `order[]` 分组同步移除该 identifier；`system_prompt === true` 的系统管理项禁删（按钮置灰 + 提示），对齐 quick-reference「数据格式坑」第 2 条。
-   - **角色分组切换**：`getOrder()` 现固定取 `character_id===100001`（回退首个分组）——改为下拉切换全部分组，增删/排序作用于当前选中分组；仅一个分组时下拉隐藏。
-   - **验收**：官方预设 + 多分组/含未排序提示词的第三方预设两档夹具冒烟；单测覆盖 order 重排与增删写回的保形（未知字段不丢、`prompts`/`order` 一致性）。
+1. ~~预设可视化三期~~ ✅ **已完成**（v0.7.0：拖拽排序/新增·删除提示词/角色分组切换，见 §3.17）。
 2. **API 集成测试进 `dotnet test`**：用 TestServer 收编冒烟，摆脱"手工起服务再跑脚本"两步走，接入 GitHub Actions CI。
 3. **前端安全网 + 拆分**：editor.js 先落 UI 自动化冒烟再拆 god-file；编辑器 dirty/saveFn 会话化（消除跨会话窄窗竞态，full-audit P1-7 深修项）。
 4. **备份健康度**：设置弹窗显示上次成功备份时间与备份目录可写性探测。
@@ -495,4 +515,4 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 
 ---
 
-**文档版本**：4.1 · **最后更新**：2026-09-05 · 对应程序版本 v0.6.1
+**文档版本**：4.2 · **最后更新**：2026-09-05 · 对应程序版本 v0.7.0

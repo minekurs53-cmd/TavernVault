@@ -639,7 +639,8 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 
 ### 9.2 当前状态（截至 2026-09-05）
 
-- 分支 `qoder/TavernVault`；v0.7.8 已推送（`3d662d0`），v0.7.9 待推送。
+- 分支 `qoder/TavernVault`；v0.7.9 已推送，且全历史已经 filter-repo 重写 + force push（门禁脱敏，
+  见 §11）。**注意：外部协作者/其他克隆需重新 clone，旧 SHA 全部失效。**
 - **项目已进入真实使用阶段**（用户自用 ST/TT 各 70+ 资源）：需求与优先级以真实使用反馈为准。
 - 验证情况：Release 构建 0 警告 0 错误；单测 93/93 + preset-model 18/18 + 集成 16/16；冒烟 207 全绿；
   图标 v2（明亮简约·翠绿文件夹叠卡）三资产生成并接线（exe/窗口/favicon/README 四处生效）。
@@ -678,14 +679,17 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 
 ### v1.0.0 发布门禁（新增，开放仓库前逐项执行，全过才改 public）
 
-- [ ] **隐私全量检查**：`git grep` 真实路径/用户名/令牌模式（`D:\agent`、`C:\Users\<真实用户>`、
+- [x] **隐私全量检查**：`git grep` 真实路径/用户名/令牌模式（`D:\agent`、`C:\Users\<真实用户>`、
   `sk-` 开头的 API key、私钥块、本地代理端口号、server-connection 内容）+ `git log --all -p`
-  全历史扫描 + Issues/PR/Actions 日志核对。v0.7.5 预扫结果：工作区零命中（docs 两处"路径"为
-  安全分析示例与测试夹具，历史零密钥）；远程侧（分支/PR/日志）待查。
-  **v0.7.9 全量复核（2026-09-05）**：工作区/全历史树/提交信息/Actions 日志/PR 正文零密钥零机器
-  路径，远程设置核清（协作者仅本人/无 deploy key/无 webhook/无 release）；遗留两处弱标识待裁决——
-  本地代理端口号（历史 docs 排障行 117 处 + 一条提交信息）与 v0.1–v0.2 两个提交的作者名
-  （Windows 账户名，邮箱为 noreply 无碍）；二者清除均需 filter-repo 重写历史 + 双分支 force push。
+  全历史扫描 + Issues/PR/Actions 日志核对。**v1.0.0 门禁执行完毕（2026-09-05，工具链：gitleaks 8.28 +
+  privacy-review/open-source-checker 技能清单）**：gitleaks 全历史零泄露；cookie/会话/JWT/凭据头/
+  局域网 IP 模式全历史零命中；机器路径仅测试攻击夹具；提交邮箱全 noreply。遗留两处弱标识
+  （本地代理端口：历史 docs 117 处 + 1 条提交信息；v0.1–v0.2 两提交作者名为 Windows 账户名）已经
+  **git filter-repo 重写清除并双分支 force push**（替换后变空的 2 条提交按空提交规则裁剪；
+  main/分支树经 blob 级比对仅文档端口行变化、二进制资产逐字节一致）。**已知残留**：GitHub 服务端
+  `refs/pull/*` 仍缓存重写前提交（可按旧 SHA 访问至 GitHub 回收；仅弱标识无密钥，彻底清除=删库重建）。
+  本机凭据面：git credential=manager（Windows 凭据管理器）、gh 令牌在 keyring、无明文
+  .git-credentials；WebView2 用户数据目录在 %LOCALAPPDATA%，从未入库。
 - [ ] **仓库设置**：可见性切 public 前核对协作者列表、deploy key、webhook；确认 LICENSE 与
   README 徽章/链接公开后可达。
 - [ ] **发布物**：GitHub Release 挂 dist 自包含包 + 更新说明。

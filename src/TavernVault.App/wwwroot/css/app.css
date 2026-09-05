@@ -250,11 +250,15 @@ select:hover { color: var(--text); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .r-desc { flex: 2; min-width: 0; font-size: 11.5px; color: var(--text-3);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row .r-meta { flex: none; font-size: 11px; color: var(--text-3); }
+.row .r-meta { flex: none; width: 138px; text-align: right; font-size: 11px; color: var(--text-3);
+  font-variant-numeric: tabular-nums; }
 .kind-chip {
   flex: none; font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 6px;
   color: #fff;
 }
+/* 列表视图：类型徽标与元信息定宽成列——徽标列、大小·日期列左右边界对齐，
+   不再因"10.2 KB/824.6 KB""预设/世界书"宽度差而锯齿（v0.7.0） */
+.row .kind-chip { width: 58px; text-align: center; }
 .row .fav-btn { position: static; opacity: 1; background: none; backdrop-filter: none; width: 24px; height: 24px; }
 .row .fav-btn .ico { color: var(--text-3); }
 .row .fav-btn.on .ico { color: #ffb02e; }
@@ -533,6 +537,34 @@ select:hover { color: var(--text); }
 }
 .pd-inject .pd-depth { width: 56px; }
 .po-cb { flex: none; width: 14px; height: 14px; accent-color: var(--accent); }
+/* v0.7.0 三期：分组切换 / 拖拽排序 / 删除 / 新增提示词表单 */
+.po-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.po-toolbar h4 { margin: 0 1px 0 0; flex: 1; font-size: 12px; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: .5px; }
+.po-group { flex: none; max-width: 180px; font-size: 11.5px; background: var(--surface-2);
+  border: 1px solid transparent; border-radius: 6px; padding: 4px 8px; color: var(--text); outline: none; }
+.po-group:focus { border-color: var(--accent); }
+.po-drag { flex: none; width: 14px; text-align: center; color: var(--text-3); cursor: grab;
+  user-select: none; letter-spacing: -2px; }
+.po-drag.ghost { opacity: .25; cursor: default; }
+.preset-row.dragging { opacity: .35; }
+.preset-row.drop-above { box-shadow: inset 0 2px 0 var(--accent); }
+.preset-row.drop-below { box-shadow: inset 0 -2px 0 var(--accent); }
+.po-del {
+  flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; border-radius: 5px; color: var(--text-3); cursor: pointer; padding: 0;
+}
+.po-del .ico { width: 13px; height: 13px; }
+.po-del:hover:not(:disabled) { background: rgba(214, 79, 111, .15); color: var(--danger); }
+.po-del:disabled { opacity: .22; cursor: not-allowed; }
+.po-addform { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--border);
+  margin-top: 10px; padding-top: 10px; }
+.po-addrow { display: flex; gap: 8px; align-items: center; }
+.po-addrow .af-name, .po-addrow .af-role { background: var(--surface-2); border: 1px solid transparent;
+  border-radius: 7px; padding: 6px 10px; font-size: 12.5px; color: var(--text); outline: none; }
+.po-addrow .af-name { flex: 1; min-width: 0; }
+.po-addrow .af-name:focus, .po-addrow .af-role:focus { border-color: var(--accent); }
+.po-addform .af-content { margin: 0; }
 
 /* 备份列表 */
 .backup-list { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }
@@ -542,3 +574,19 @@ select:hover { color: var(--text); }
 }
 .backup-item .b-time { flex: 1; font-weight: 600; }
 .backup-item .b-size { color: var(--text-3); font-size: 11px; }
+
+/* ---- 新建文件（v0.6.0）：topbar 按钮 + 类型下拉浮层 ---- */
+.create-menu {
+  position: fixed; z-index: 80;
+  min-width: 172px; padding: 5px;
+  display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+}
+.create-menu-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 10px; border-radius: 7px;
+  font-size: 13px; color: var(--text); text-align: left;
+}
+.create-menu-item:hover { background: var(--surface-2); }
+.create-menu-item .ico { width: 15px; height: 15px; }

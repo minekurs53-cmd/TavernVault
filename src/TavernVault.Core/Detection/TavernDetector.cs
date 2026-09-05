@@ -5,8 +5,12 @@ namespace TavernVault.Core.Detection;
 /// <summary>检测本机 SillyTavern / TauriTavern 安装目录。不包含任何机器特定路径：优先环境变量，回退用户目录约定。</summary>
 public static class TavernDetector
 {
+    // 与官方功能分区一致的接入子目录（v0.6.1 回撤 v0.6.0 扩充的 6 项模板/快捷回复类目录：
+    // 对应分类已移除，这些目录里的 JSON 会按内容落"文本/脚本"，不再有专属分区）。
     public static readonly string[] Subdirs =
-        ["characters", "worlds", "OpenAI Settings", "themes", "regex"];
+    [
+        "characters", "worlds", "OpenAI Settings", "themes", "regex",
+    ];
 
     /// <summary>
     /// 检测酒馆数据目录。候选顺序：环境变量（TV_SILLYTAVERN_DATA / TV_TAURITAVERN_DATA）

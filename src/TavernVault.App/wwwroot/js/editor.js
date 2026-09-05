@@ -3,6 +3,7 @@
 import { api } from './api.js';
 import { el, $, icon, hydrateIcons, toast, escapeHtml, confirmDialog } from './util.js';
 import { refreshItems, refreshMeta, kindMeta } from './app.js';
+import { addPrompt, getGroups, isSystemPrompt, pickGroup, removePrompt, reorderGroup } from './preset-model.js';
 
 let dirty = false;
 let onCloseCleanup = null;
@@ -392,6 +393,8 @@ const POSITION_OPTIONS = [
 async function buildLoreEditor(item, opts = {}) {
   const embedded = !!opts.embedded; // 角色卡内嵌世界书模式
   const data = embedded ? await api.cardBook(item.id) : await api.lore(item.id);
+  // v0.6.0 容器保形：独立世界书 GET 回传 container("object"/"array")，保存时原样带回
+  const loreContainer = data.container;
   let entries = data.entries.map((e) => ({ key: e.key, data: e.data || {}, raw: e.raw }));
   let selected = 0;
 
@@ -541,8 +544,10 @@ async function buildLoreEditor(item, opts = {}) {
         refreshItems();
         refreshMeta();
       } else {
+        // container 原样回传：数组容器（Spec V2/NovelAI 导出）走服务端保形合并，不会被改写成对象
         const r = await api.saveLore(item.id, {
-          entries: entries.map((e) => ({ key: e.key, data: e.data })),
+          entries: entries.map((e) => ({ key: e.key, data: e.data, raw: e.raw })),
+          container: loreContainer,
           expectedModified: item.modifiedAt,
         });
         clearDirty();
@@ -713,34 +718,120 @@ async function buildPresetEditor(item) {
     return card;
   }
 
+  // 当前展示的排序分组（character_id 原值；getOrder 惰性解析并回写实际命中的值）
+  let activeGroupId;
+  let dragId = null; // 拖拽排序进行中的 identifier
+
+  // v0.7.0 三期：分组选择交给 preset-model.pickGroup（精确 → 默认 100001 → 第一组）
   function getOrder() {
-    const groups = Array.isArray(preset.prompt_order) ? preset.prompt_order : [];
-    const group = groups.find((g) => g.character_id === 100001) || groups[0];
-    return { group, orderList: Array.isArray(group?.order) ? group.order : [] };
+    const group = pickGroup(preset, activeGroupId);
+    if (group) activeGroupId = group.character_id;
+    return { group, orderList: group?.order ?? [] };
+  }
+
+  function groupLabel(g) {
+    return g.character_id === 100001 ? `默认角色 (${g.character_id})` : `角色 ${g.character_id}`;
+  }
+
+  // 删除提示词（生效序列与未排序清单共用）：确认 → prompts 与所有分组 order 同步移除
+  async function deletePromptFlow(identifier, name) {
+    const yes = await confirmDialog({
+      title: '删除提示词',
+      message: `确定从预设中删除「${name}」？将同时从所有排序分组中移除。`,
+      okText: '删除', danger: true,
+    });
+    if (!yes) return;
+    const r = removePrompt(preset, identifier);
+    if (!r.ok) {
+      toast(r.reason === 'system' ? '系统管理项不可删除' : '未找到该提示词', 'err');
+      return;
+    }
+    touch();
+    renderVisual();
   }
 
   function buildOrderCard() {
     const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
     const byId = new Map(prompts.map((p) => [p.identifier, p]));
+    const groups = getGroups(preset);
     const { orderList } = getOrder();
 
-    const card = el('<div class="form-card"><h4>生效顺序（prompt_order · 默认角色，勾选 = 启用）</h4><div class="preset-list"></div></div>');
+    const card = el(`<div class="form-card">
+      <div class="po-toolbar">
+        <h4>生效顺序 · 勾选启用 / 拖拽排序</h4>
+        ${groups.length > 1 ? '<select class="po-group" title="排序分组（character_id）"></select>' : ''}
+        <button class="btn sm po-add"><span class="ico">${icon('plus')}</span>新增提示词</button>
+      </div>
+      <div class="preset-list"></div>
+      <div class="po-addform" hidden>
+        <div class="po-addrow">
+          <input class="af-name" placeholder="名称（留空则用「新提示词」）">
+          <select class="af-role">
+            <option value="system">system（系统）</option>
+            <option value="user">user（用户）</option>
+            <option value="assistant">assistant（AI）</option>
+          </select>
+        </div>
+        <textarea class="af-content pd-edit" rows="4" placeholder="提示词内容（创建后可在下方详情继续编辑）"></textarea>
+        <div class="po-addrow">
+          <button class="btn primary sm af-ok"><span class="ico">${icon('check')}</span>创建</button>
+          <button class="btn sm af-cancel">取消</button>
+        </div>
+      </div>
+    </div>`);
     const list = card.querySelector('.preset-list');
+
+    // 角色分组切换（>1 组才显示；增删/排序作用于当前选中分组）
+    const groupSel = card.querySelector('.po-group');
+    if (groupSel) {
+      groupSel.innerHTML = groups
+        .map((g) => `<option value="${escapeHtml(String(g.character_id))}">${escapeHtml(groupLabel(g))}</option>`)
+        .join('');
+      groupSel.value = String(activeGroupId);
+      groupSel.addEventListener('change', () => {
+        const g = groups.find((x) => String(x.character_id) === groupSel.value);
+        activeGroupId = g?.character_id;
+        renderVisual();
+      });
+    }
+
+    // 新增提示词：写入 prompts[] + 当前分组 order[] 末尾（enabled:true）
+    const addForm = card.querySelector('.po-addform');
+    card.querySelector('.po-add').addEventListener('click', () => {
+      addForm.hidden = !addForm.hidden;
+      if (!addForm.hidden) addForm.querySelector('.af-name').focus();
+    });
+    addForm.querySelector('.af-cancel').addEventListener('click', () => { addForm.hidden = true; });
+    addForm.querySelector('.af-ok').addEventListener('click', () => {
+      const created = addPrompt(preset, activeGroupId, {
+        name: addForm.querySelector('.af-name').value.trim(),
+        role: addForm.querySelector('.af-role').value,
+        content: addForm.querySelector('.af-content').value,
+      });
+      if (!created) { toast('该预设缺少 prompts 数组，无法新增', 'err'); return; }
+      touch();
+      toast('已新增（保存后写入文件）');
+      renderVisual();
+      // 直接选中新行，便于立即编辑内容
+      visualView.querySelector(`.preset-row[data-identifier="${CSS.escape(created.identifier)}"]`)?.click();
+    });
 
     orderList.forEach((o, idx) => {
       const p = byId.get(o.identifier);
-      const isMarker = p?.marker === true || p?.system_prompt === true;
+      const isMarker = isSystemPrompt(p);
       const name = p?.name || o.identifier;
       // role 来自第三方预设文件内容（不可信），非标准取值回退原值时必须转义（v0.5.1 XSS 修复）
       const role = isMarker ? '系统' : (p?.role ? (ROLE_LABELS[p.role] || escapeHtml(p.role)) : '—');
       const len = p?.content ? p.content.length : 0;
 
-      const row = el(`<div class="preset-row ${o.enable ? '' : 'off'}">
+      const row = el(`<div class="preset-row ${o.enabled ? '' : 'off'}" draggable="true" data-identifier="${escapeHtml(o.identifier)}">
+        <span class="po-drag" title="拖拽排序">⋮⋮</span>
         <span class="po-idx">${idx + 1}</span>
         <input type="checkbox" class="po-cb" title="启用/禁用">
         <span class="po-name">${escapeHtml(name)}</span>
         <span class="po-role">${role}</span>
         <span class="po-len">${len ? len + ' 字' : ''}</span>
+        <button class="po-del" title="${isMarker ? '系统管理项不可删除' : '删除提示词'}" ${isMarker ? 'disabled' : ''}><span class="ico">${icon('trash')}</span></button>
       </div>`);
       const cb = row.querySelector('.po-cb');
       cb.checked = !!o.enabled;
@@ -759,6 +850,49 @@ async function buildPresetEditor(item) {
           row.querySelector('.po-len').textContent = newLen ? newLen + ' 字' : '';
         });
       });
+      row.querySelector('.po-del').addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isMarker) return;
+        deletePromptFlow(o.identifier, name);
+      });
+
+      // 拖拽排序：dragover 按上半/下半计算插入位，drop 按新次序写回当前分组 order
+      //（只重排数组、沿用原对象引用，enabled 与 prompts[] 本体不动——保形见 preset-model 单测）
+      row.addEventListener('dragstart', (e) => {
+        dragId = o.identifier;
+        row.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(o.identifier));
+      });
+      row.addEventListener('dragend', () => {
+        dragId = null;
+        row.classList.remove('dragging');
+        list.querySelectorAll('.preset-row').forEach((r) => r.classList.remove('drop-above', 'drop-below'));
+      });
+      row.addEventListener('dragover', (e) => {
+        if (!dragId || dragId === o.identifier) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        list.querySelectorAll('.preset-row').forEach((r) => r.classList.remove('drop-above', 'drop-below'));
+        const rect = row.getBoundingClientRect();
+        row.classList.add(e.clientY < rect.top + rect.height / 2 ? 'drop-above' : 'drop-below');
+      });
+      row.addEventListener('drop', (e) => {
+        if (!dragId || dragId === o.identifier) return;
+        e.preventDefault();
+        const before = row.classList.contains('drop-above');
+        const dragged = orderList.find((x) => x.identifier === dragId);
+        if (!dragged) return;
+        const ids = orderList.map((x) => x.identifier).filter((id) => id !== dragId);
+        let at = ids.indexOf(o.identifier);
+        if (!before) at++;
+        ids.splice(at, 0, dragId);
+        reorderGroup(preset, activeGroupId, ids.map((id) => orderList.find((x) => x.identifier === id)));
+        dragId = null;
+        touch();
+        renderVisual();
+      });
+
       list.appendChild(row);
     });
     return card;
@@ -774,21 +908,30 @@ async function buildPresetEditor(item) {
     const card = el('<div class="form-card"><h4>未加入生效序列的提示词</h4><div class="preset-list"></div></div>');
     const list = card.querySelector('.preset-list');
     unordered.forEach((p) => {
-      const isMarker = p.marker === true || p.system_prompt === true;
-      const row = el(`<div class="preset-row">
+      const isMarker = isSystemPrompt(p);
+      const name = p.name || p.identifier;
+      const row = el(`<div class="preset-row" data-identifier="${escapeHtml(p.identifier)}">
+        <span class="po-drag ghost">⋮⋮</span>
         <span class="po-idx">·</span>
         <span class="po-cb"></span>
-        <span class="po-name">${escapeHtml(p.name || p.identifier)}</span>
+        <span class="po-name">${escapeHtml(name)}</span>
         <span class="po-role">${isMarker ? '系统' : (ROLE_LABELS[p.role] || escapeHtml(p.role) || '—')}</span>
         <span class="po-len">${p.content ? p.content.length + ' 字' : ''}</span>
+        <button class="po-del" title="${isMarker ? '系统管理项不可删除' : '删除提示词'}" ${isMarker ? 'disabled' : ''}><span class="ico">${icon('trash')}</span></button>
       </div>`);
-      row.addEventListener('click', () => {
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('.po-del')) return;
         list.querySelectorAll('.preset-row').forEach((r) => r.classList.remove('sel'));
         row.classList.add('sel');
         renderPresetDetail(p, p.identifier, (newName, newLen) => {
           row.querySelector('.po-name').textContent = newName || p.identifier;
           row.querySelector('.po-len').textContent = newLen ? newLen + ' 字' : '';
         });
+      });
+      row.querySelector('.po-del').addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isMarker) return;
+        deletePromptFlow(p.identifier, name);
       });
       list.appendChild(row);
     });

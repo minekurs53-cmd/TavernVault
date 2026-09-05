@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-03 · 对应 v0.5.3
+> 最后更新：2026-09-05 · 对应 v0.7.0
 
 ## 一分钟了解
 
@@ -32,7 +32,8 @@ dotnet test TavernVault.slnx -c Release    # 单元测试（数量以输出为�
 PYTHONIOENCODING=utf-8 python tests/smoke_api.py
 
 # 前端语法检查（必须 .mjs，否则抓不到模块级错误）
-for f in api app editor main util; do cp src/TavernVault.App/wwwroot/js/$f.js /tmp/$f.mjs && node --check /tmp/$f.mjs && echo "$f OK"; done
+for f in api app editor main preset-model util; do cp src/TavernVault.App/wwwroot/js/$f.js /tmp/$f.mjs && node --check /tmp/$f.mjs && echo "$f OK"; done
+node tests/preset-model.test.mjs           # 预设写回纯函数测试（无框架）
 ```
 
 ⚠️ Git Bash 陷阱：`--data=` 的绝对路径反斜杠会被吞，**用相对路径或正斜杠**。
@@ -104,6 +105,7 @@ POST   /api/roots                      # {path, source: normal|tavernST|tavernTT
 DELETE /api/roots                      # {path}
 POST   /api/tavern/detect              # 探测本机酒馆
 POST   /api/tavern/connect             # {source} 批量接入子目录
+POST   /api/items/create               # 新建文件 {kind,name,root?}：仅普通库根，重名加序号
 POST   /api/pick-folder                # 原生目录选择框（无窗口模式 400）
 ```
 
@@ -113,12 +115,16 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 |---|---|---|
 | `character` | 角色卡 | PNG tEXt 内嵌 chara/ccv3，或 JSON 卡片结构 |
 | `lorebook` | 世界书 | `entries` 结构 |
-| `preset` | 预设 | `prompts`+采样器 |
-| `theme` | 美化 | 主题 CSS/JSON 特征 |
-| `script` | 脚本 | 酒馆助手脚本/正则特征 |
+| `preset` | 预设 | `prompts`+采样器（带 prompts 数组恒判预设，采样字段再多也不例外） |
+| `theme` | 美化 | 主题 CSS/JSON 特征（官方字段名，v0.6.0 修正） |
+| `script` | 脚本 | 酒馆助手脚本/正则特征；`{name,content,post_history}`（官方 sysprompt）也归此 |
 | `text` | 文本 | 可读文本扩展名 |
 | `archive` | 压缩包 | zip/7z/rar 等 |
 | `other` | 其他 | 兜底 |
+
+> v0.6.1 回撤了 v0.6.0 曾设的 5 类（`textgen`/`instruct`/`context`/`sysprompt`/`quickreplies`）：
+> 官方模板类 JSON 缺乏编辑价值且个别规则误收预设文件，统一回落"文本/脚本"（原文编辑器仍可编辑）；
+> `/api/items/create` 对这 5 个 kind 键返回 400。
 
 ## 数据格式坑（改编辑器前必看）
 
@@ -126,11 +132,12 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 |---|---|
 | 预设启用字段 | `prompt_order[].order[].enabled`，**不是 `enable`** |
 | 系统管理提示词 | `prompts[].system_prompt === true`，内容只读防误删 |
+| 预设结构增删/排序 | 一律走 `preset-model.js` 纯函数（prompts 与所有分组 order 双数组一致性、系统项拒删、漏传补回已在其内兜底） |
 | 内嵌书条目双格式 | Spec V2(`keys/enabled/insertion_order`) ↔ ST(`key/disable/order/position 0-6`)；读转 ST、写保形合并，`Raw` 原样回传 |
-| entries 容器形态 | 数组/对象**不能互换**，否则下游工具解析失败 |
+| entries 容器形态 | 数组/对象**不能互换**；v0.6.0 起 /api/lore 按容器保形（GET 回传 container，PUT 按容器写回） |
 | PNG 卡 | 保存必须一次重写 chara+ccv3 两个块（`WriteTexts`） |
 | JSON 卡 | 保存同步根级 V1 镜像（`SyncLegacyMirror`） |
-| 索引版本 | 改 `LibraryItem` 字段 → `IndexVersion` +1（当前 3） |
+| 索引版本 | 改 `LibraryItem` 字段或识别规则 → `IndexVersion` +1（当前 4；v0.6.1 因回撤 5 类由 3→4） |
 | 条目 Id | 路径哈希；改名/移动后必须迁移用户数据快照 |
 
 ## 故障排查

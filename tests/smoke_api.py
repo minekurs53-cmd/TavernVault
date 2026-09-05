@@ -395,7 +395,7 @@ check("libraries 存在三库", {l.get("key") for l in libs} == {"normal", "tave
 check("每库键齐全", all(
     all(k in l for k in ("key", "label", "total", "rootCount", "favorites", "kinds", "dirs", "tags"))
     for l in libs))
-check("每库 kinds 8 类", all(len(l["kinds"]) == 8 for l in libs))
+check("每库 kinds 8 类", all(len(l["kinds"]) == 8 for l in libs))  # v0.6.1 回撤 5 类官方模板分类
 check("库内不变量 Σkinds==total", all(sum(k["count"] for k in l["kinds"]) == l["total"] for l in libs))
 check("全局 total==Σ库 total", sum(l["total"] for l in libs) == meta["total"])
 roots_by_source = {}
@@ -541,6 +541,266 @@ check("酒馆根已移除", all(os.path.normcase((rr or {}).get("path") or "") !
 shutil.rmtree(TAVERN, ignore_errors=True)
 try: os.rmdir(os.path.dirname(TAVERN))  # .smoke 父目录空了就一并撤掉
 except OSError: pass
+
+print("== 格式识别回落（v0.6.1 回撤 5 类官方模板分类）==")
+# 夹具字段取自官方真实文件：
+#   textgen ← default/content/presets/textgen/Universal-Light.json
+#   instruct ← default/content/presets/instruct/ChatML.json
+#   context ← default/content/presets/context/Default.json
+#   sysprompt ← default/content/presets/sysprompt/Blank.json
+#   quickreplies ← quick-reply/src/QuickReplySet.js 的 v2 序列化结构
+# v0.6.1 起这 5 类不再设专属分类：官方模板 JSON 回落"文本"或"脚本"（原文编辑器可用）。
+# 段内自清理（条目进回收站 + 重扫）；段前先清残留文件，同数据目录可重复跑。
+V60_DIR = TESTDATA
+V60_FIXTURES = {
+    "冒烟文本预设.json": ("text", {
+        "temp": 1.25, "temperature_last": False, "top_p": 1, "top_k": 0, "top_a": 0,
+        "tfs": 1, "typical_p": 1, "min_p": 0.1, "rep_pen": 1, "rep_pen_range": 0,
+        "smoothing_factor": 0, "add_bos_token": True, "ban_eos_token": False,
+        "skip_special_tokens": True, "mirostat_mode": 0, "mirostat_tau": 5, "mirostat_eta": 0.1,
+        "sampler_priority": ["repetition_penalty", "temperature"],
+    }),
+    "冒烟指令模板.json": ("text", {
+        "input_sequence": "<|im_start|>user", "output_sequence": "<|im_start|>assistant",
+        "last_output_sequence": "", "system_sequence": "<|im_start|>system",
+        "stop_sequence": "<|im_end|>", "wrap": True, "macro": True,
+        "names_behavior": "force", "output_suffix": "<|im_end|>\n", "name": "ChatML",
+    }),
+    "冒烟上下文模板.json": ("text", {
+        "story_string": "{{#if system}}{{system}}\n{{/if}}{{trim}}",
+        "example_separator": "***", "chat_start": "***",
+        "use_stop_strings": False, "names_as_stop_strings": True,
+        "story_string_position": 0, "story_string_depth": 1, "name": "Default",
+    }),
+    "冒烟系统提示.json": ("script", {
+        "name": "Blank", "content": "", "post_history": "",
+    }),
+    "冒烟快捷回复.json": ("text", {
+        "version": 2, "name": "我的快捷回复", "disableSend": False,
+        "placeBeforeInput": False, "injectInput": False,
+        "qrList": [{"id": 1, "label": "继续", "showLabel": True, "title": "",
+                    "message": "/continue", "contextList": [], "isHidden": False,
+                    "executeOnAi": False}],
+        "idIndex": 1,
+    }),
+}
+for fn in list(V60_FIXTURES) + ["冒烟误收预设.json"]:  # 清理上一轮残留（中途失败时文件可能还在）
+    p = os.path.join(V60_DIR, fn)
+    if os.path.exists(p):
+        os.remove(p)
+
+for fn, (_, fixture) in V60_FIXTURES.items():
+    with open(os.path.join(V60_DIR, fn), "w", encoding="utf-8") as f:
+        json.dump(fixture, f, ensure_ascii=False)
+call("POST", "/api/rescan")
+for fn, (kind, _) in V60_FIXTURES.items():
+    stem = fn[:-len(".json")]
+    found = call("GET", "/api/items?q=" + urllib.parse.quote(stem))
+    check(f"识别 {kind}", len(found) == 1 and found[0]["kind"] == kind,
+          str([(i["fileName"], i["kind"]) for i in found]))
+
+# 优先级回归：裸 {name, content} 与官方 sysprompt 三键文件同判脚本（v0.6.1 起 sysprompt 无专属分类）
+with open(os.path.join(V60_DIR, "冒烟普通脚本.json"), "w", encoding="utf-8") as f:
+    json.dump({"name": "脚本", "content": "console.log(1)"}, f, ensure_ascii=False)
+call("POST", "/api/rescan")
+plain = call("GET", "/api/items?q=" + urllib.parse.quote("冒烟普通脚本"))
+check("裸 name+content 仍为 script", len(plain) == 1 and plain[0]["kind"] == "script",
+      str([(i["fileName"], i["kind"]) for i in plain]))
+
+# 误收回归（v0.6.1 移除 textgen 规则的动机之一）：采样字段再多，只要带 prompts 数组就恒判预设
+with open(os.path.join(V60_DIR, "冒烟误收预设.json"), "w", encoding="utf-8") as f:
+    misread = dict(V60_FIXTURES["冒烟文本预设.json"][1])
+    misread["prompts"] = [{"identifier": "main"}]
+    json.dump(misread, f, ensure_ascii=False)
+call("POST", "/api/rescan")
+misread_items = call("GET", "/api/items?q=" + urllib.parse.quote("冒烟误收预设"))
+check("采样字段+prompts 恒判预设", len(misread_items) == 1 and misread_items[0]["kind"] == "preset",
+      str([(i["fileName"], i["kind"]) for i in misread_items]))
+
+# ---- Spec V2 数组世界书：GET 转 ST + container=array，PUT 保形合并，磁盘容器仍为数组 ----
+ARR_ORIGINAL = {
+    "name": "冒烟数组书",
+    "description": "Spec V2 / NovelAI 导出：entries 为数组",
+    "entries": [
+        {"keys": ["词A"], "content": "内容A", "comment": "条目A", "enabled": True,
+         "insertion_order": 10, "position": "before_char", "id": 7, "selective": True,
+         "use_regex": False, "extensions": {"depth": 4, "use_probability": 100}},
+        {"keys": ["词B"], "secondary_keys": ["次B"], "content": "内容B", "enabled": False,
+         "insertion_order": 20, "position": "after_char", "constant": True, "id": 9,
+         "extensions": {}},
+    ],
+}
+arr_path = os.path.join(V60_DIR, "冒烟数组书.json")
+if os.path.exists(arr_path):
+    os.remove(arr_path)
+with open(arr_path, "w", encoding="utf-8") as f:
+    json.dump(ARR_ORIGINAL, f, ensure_ascii=False)
+call("POST", "/api/rescan")
+arr_items = call("GET", "/api/items?kind=lorebook&q=" + urllib.parse.quote("冒烟数组书"))
+check("数组世界书识别为 lorebook", len(arr_items) == 1 and arr_items[0]["kind"] == "lorebook",
+      str([(i["fileName"], i["kind"]) for i in arr_items]))
+arr_id = arr_items[0]["id"]
+
+lore = call("GET", f"/api/lore/{arr_id}")
+check("GET 标记 container=array", lore.get("container") == "array", str(lore.get("container")))
+check("数组条目数=2", len(lore["entries"]) == 2)
+e = lore["entries"][0]
+check("Spec→ST 转换", e["data"]["key"] == ["词A"] and e["data"]["order"] == 10
+      and e["data"]["position"] == 0 and e["data"]["disable"] is False)
+check("raw 原条目回传", e.get("raw") is not None and e["raw"].get("id") == 7
+      and e["raw"].get("selective") is True)
+
+# 编辑一条（raw 原样回传），PUT 带 container=array
+e["data"]["content"] = "内容A改"
+e["data"]["disable"] = True
+r = call("PUT", f"/api/lore/{arr_id}", {"entries": lore["entries"], "container": "array"})
+check("数组容器保存成功", (r or {}).get("ok") is True and (r or {}).get("count") == 2, str(r)[:80])
+
+lore2 = call("GET", f"/api/lore/{arr_id}")
+check("编辑生效且仍为 array", lore2.get("container") == "array"
+      and lore2["entries"][0]["data"]["content"] == "内容A改"
+      and lore2["entries"][0]["data"]["disable"] is True)
+check("raw 字段保留", lore2["entries"][0]["raw"].get("id") == 7
+      and lore2["entries"][0]["raw"].get("selective") is True)
+
+with open(arr_items[0]["fullPath"], encoding="utf-8") as f:
+    on_disk = json.load(f)
+check("磁盘容器仍为数组", isinstance(on_disk["entries"], list))
+edited = on_disk["entries"][0]
+check("磁盘条目 raw 字段保留", edited.get("id") == 7 and edited.get("selective") is True
+      and edited.get("use_regex") is False and edited.get("keys") == ["词A"]
+      and edited.get("extensions", {}).get("depth") == 4)
+check("磁盘条目编辑翻转 enabled", edited.get("enabled") is False and edited.get("content") == "内容A改")
+check("未编辑条目原样", on_disk["entries"][1] == ARR_ORIGINAL["entries"][1])
+object_lore = call("GET", "/api/items?kind=lorebook&q=" + urllib.parse.quote("测试书"))
+check("对象容器默认行为不回归", call("GET", f"/api/lore/{object_lore[0]['id']}").get("container") == "object")
+
+# 段末清理：全部夹具进回收站 → 重扫
+for fn in list(V60_FIXTURES) + ["冒烟误收预设.json"]:
+    it = call("GET", "/api/items?q=" + urllib.parse.quote(fn[:-len(".json")]))
+    for row in it:
+        call("POST", f"/api/items/{row['id']}/delete", {})
+call("POST", f"/api/items/{arr_id}/delete", {})
+plain_id = call("GET", "/api/items?q=" + urllib.parse.quote("冒烟普通脚本"))
+for row in plain_id:
+    call("POST", f"/api/items/{row['id']}/delete", {})
+call("POST", "/api/rescan")
+check("v0.6.1 夹具已清理", all(
+    call("GET", "/api/items?q=" + urllib.parse.quote(fn[:-len(".json")])) == []
+    for fn in list(V60_FIXTURES) + ["冒烟数组书.json", "冒烟普通脚本.json", "冒烟误收预设.json"]))
+
+print("== 新建文件（v0.6.0，v0.6.1 收敛为 6 类）==")
+# 6 个可新建 kind（archive/other 不支持）。逐一 create → 识别回路 → 可编辑 → 删除清理。
+CREATE_KINDS = {
+    "character": "角色卡", "lorebook": "世界书", "preset": "预设",
+    "theme": "美化", "script": "脚本", "text": "文本",
+}
+created_ids = []
+
+
+def create_one(kind, name, root=None):
+    body = {"kind": kind, "name": name}
+    if root:
+        body["root"] = root
+    return call("POST", "/api/items/create", body)
+
+
+# 段前清理上一轮残留（同名文件会让本轮命中" (2)"序号，断言按 id 不受影响，但磁盘会积垃圾）
+for fn in list(os.listdir(TESTDATA)):
+    if fn.startswith("冒烟新建"):
+        os.remove(os.path.join(TESTDATA, fn))
+
+for kind, label in CREATE_KINDS.items():
+    r = create_one(kind, "冒烟新建" + label)
+    check(f"create {kind} 返回 ok+id", (r or {}).get("ok") is True and bool((r or {}).get("id")), str(r)[:80])
+    if not (r or {}).get("id"):
+        continue
+    rid = r["id"]
+    created_ids.append(rid)
+    check(f"create {kind} 文件名正确", r.get("fileName", "").startswith("冒烟新建" + label)
+          and "/" not in r.get("fileName", "") and "\\" not in r.get("fileName", ""), r.get("fileName", ""))
+    # 识别回路：创建出的文件必须被自家识别回对应 kind（硬验收）
+    item = call("GET", f"/api/items/{rid}")
+    check(f"识别回路 {kind}", item.get("kind") == kind, f"got={item.get('kind')}")
+
+# 可编辑确认：character/lorebook 走专用端点，其余（.json/.txt）走文本端点
+char_id = created_ids[0]
+r = call("PUT", f"/api/cards/{char_id}", {"fields": {"description": "新建卡描述"}})
+check("新建角色卡可编辑", (r or {}).get("ok") is True, str(r)[:60])
+check("新建角色卡编辑生效",
+      call("GET", f"/api/cards/{char_id}")["card"]["data"]["description"] == "新建卡描述")
+
+lore_id = created_ids[1]
+lore = call("GET", f"/api/lore/{lore_id}")
+check("新建世界书 container=object 空条目", lore.get("container") == "object" and lore.get("entries") == [],
+      str(lore)[:60])
+r = call("PUT", f"/api/lore/{lore_id}", {"entries": [
+    {"key": "0", "data": {"key": ["词"], "content": "内容", "comment": "条目",
+                          "constant": False, "disable": False, "order": 1,
+                          "position": 0, "depth": 4, "probability": 100}}]})
+check("新建世界书可编辑", (r or {}).get("ok") is True and (r or {}).get("count") == 1, str(r)[:60])
+
+for rid, kind in [(rid, k) for rid, k in zip(created_ids, CREATE_KINDS)
+                  if k not in ("character", "lorebook")]:
+    cur = call("GET", f"/api/text/{rid}")["content"]
+    if kind == "text":
+        content = "冒烟新建文本内容"
+    else:  # .json 保留合法 JSON，只改一个字段
+        obj = json.loads(cur)
+        obj.setdefault("__smoke__", True)
+        content = json.dumps(obj, ensure_ascii=False)
+    r = call("PUT", f"/api/text/{rid}", {"content": content})
+    check(f"新建 {kind} 可文本编辑", (r or {}).get("ok") is True, str(r)[:60])
+    check(f"新建 {kind} 编辑后识别不变", call("GET", f"/api/items/{rid}").get("kind") == kind)
+
+# 重名：同名再建 → ok 且文件名带 " (2)" 序号
+r1 = create_one("text", "冒烟新建重名")
+r2 = create_one("text", "冒烟新建重名")
+check("重名自动加序号", (r1 or {}).get("ok") is True and (r2 or {}).get("ok") is True
+      and r2.get("fileName") == "冒烟新建重名 (2).txt", f"{r1 and r1.get('fileName')} / {r2 and r2.get('fileName')}")
+created_ids += [r1["id"], r2["id"]]
+
+# 显式 root：普通库根可指定
+r = create_one("text", "冒烟新建指定根", root=TESTDATA)
+check("显式普通 root 创建成功", (r or {}).get("ok") is True, str(r)[:60])
+created_ids.append(r["id"])
+
+# 负向合同
+code = call_code("POST", "/api/items/create", {"kind": "archive", "name": "冒烟新建压缩包"})
+check("kind=archive 400", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/items/create", {"kind": "other", "name": "冒烟新建其他"})
+check("kind=other 400", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/items/create", {"kind": "textgen", "name": "冒烟新建文本预设"})
+check("kind=textgen 400（v0.6.1 已回撤）", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/items/create", {"kind": "不存在的类型", "name": "x"})
+check("非法 kind 400", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/items/create", {"kind": "text", "name": ""})
+check("name 空 400", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/items/create", {"kind": "text", "name": "..."})
+check("name 清洗后为空 400", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/items/create", {"kind": "text", "name": "冒烟新建越权", "root": "D:\\不存在的根\\nope"})
+check("非法 root 400", code == 400, f"HTTP {code}")
+
+# 酒馆来源根禁止新建（护栏哲学）：构造 tavernST 根再试，完事移除。
+# 同酒馆护栏段：必须独立目录（.smoke/ 下），不能嵌在 TESTDATA 里（normal 根会抢注）。
+TAVERN_CR = os.path.abspath(os.path.join(".smoke", "酒馆源-新建"))
+os.makedirs(TAVERN_CR, exist_ok=True)
+call("POST", "/api/roots", {"path": TAVERN_CR, "source": "tavernST"})
+code = call_code("POST", "/api/items/create", {"kind": "text", "name": "冒烟新建酒馆根", "root": TAVERN_CR})
+r = create_one("text", "冒烟新建酒馆根", root=TAVERN_CR)
+check("酒馆来源 root 400", code == 400 and "error" in (r or {}), f"HTTP {code}")
+# 清理：移除根 + 删空目录
+call("DELETE", "/api/roots", {"path": TAVERN_CR})
+shutil.rmtree(TAVERN_CR, ignore_errors=True)
+
+# 段末清理：全部新建条目进回收站 → 重扫
+for rid in created_ids:
+    call("POST", f"/api/items/{rid}/delete", {})
+call("POST", "/api/rescan")
+check("新建文件段已清理", all(
+    call("GET", f"/api/items/{rid}") == {"error": "条目不存在"} for rid in created_ids))
+leftover = [fn for fn in os.listdir(TESTDATA) if fn.startswith("冒烟新建")]
+check("新建文件磁盘已清理", leftover == [], str(leftover))
 
 print("== 错误合同（v0.5.2 回归）==")
 code = call_code("GET", "/api/items/unknownid0000")

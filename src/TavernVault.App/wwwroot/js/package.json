@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "description": "仅供 Node 识别 wwwroot/js 下的 .js 为 ES 模块（preset-model 单测用）；浏览器与 ASP.NET 静态托管不读此文件"
+}

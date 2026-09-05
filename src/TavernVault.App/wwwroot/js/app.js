@@ -76,6 +76,7 @@ export function renderSidebar() {
   const counts = {};
   (lib?.kinds || []).forEach((k) => { counts[k.kind] = k.count; });
   $('#brand-count').textContent = lib ? `共 ${lib.total} 个资源` : '索引中…';
+  syncCreateButton(); // (v0.6.0) 切库/刷新时同步「新建」按钮可见性
 
   const mkItem = ({ label, ico, color, count, active, onClick }) => {
     const n = el(`
@@ -624,6 +625,78 @@ async function showMoveDialog(item) {
   });
 }
 
+// ============ 新建文件（v0.6.0） ============
+
+// 可新建的 6 类（archive/other 无模板意义，不列）；顺序即菜单展示顺序
+const CREATE_KINDS = [
+  'character', 'lorebook', 'preset', 'theme', 'script', 'text',
+];
+
+let createMenu = null; // 当前打开的新建菜单浮层
+
+// 「新建」按钮挂在静态 #topbar 里（view-toggle 旁），仅普通库可见——酒馆库的文件由酒馆管理
+function initCreateButton() {
+  const btn = el(`<button class="icon-btn" id="btn-create" title="新建文件" hidden>
+    <span class="ico">${icon('plus')}</span></button>`);
+  $('#view-toggle').before(btn);
+  btn.addEventListener('click', () => (createMenu ? closeCreateMenu() : openCreateMenu(btn)));
+  // 点击按钮与浮层以外的位置关闭
+  document.addEventListener('mousedown', (e) => {
+    if (createMenu && !createMenu.contains(e.target) && !btn.contains(e.target)) closeCreateMenu();
+  });
+}
+
+// 随侧栏刷新同步按钮可见性（切库逻辑已有 current library 状态）
+function syncCreateButton() {
+  const btn = $('#btn-create');
+  if (btn) btn.hidden = state.filter.library !== 'normal';
+}
+
+function openCreateMenu(btn) {
+  createMenu = el('<div class="create-menu"></div>');
+  CREATE_KINDS.forEach((kind) => {
+    const km = kindMeta(kind);
+    const itemBtn = el(`<button class="create-menu-item" data-kind="${kind}">
+      <span class="ico" style="color:${km.color}">${icon(km.icon)}</span>
+      <span>${escapeHtml(km.label)}</span>
+    </button>`);
+    itemBtn.addEventListener('click', () => {
+      closeCreateMenu();
+      createFlow(kind, km.label);
+    });
+    createMenu.appendChild(itemBtn);
+  });
+  document.body.appendChild(createMenu);
+  // fixed 定位贴到按钮下方、右缘对齐（topbar 在右侧）
+  const r = btn.getBoundingClientRect();
+  createMenu.style.top = `${r.bottom + 6}px`;
+  createMenu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+}
+
+function closeCreateMenu() {
+  createMenu?.remove();
+  createMenu = null;
+}
+
+// 选类型 → 输名称 → 创建 → 刷新后直接进入编辑器
+async function createFlow(kind, label) {
+  try {
+    const name = await promptDialog({
+      title: `新建${label}`,
+      message: '将创建一个空白模板文件。',
+      value: `新${label}`,
+    });
+    if (!name) return;
+    const r = await api.createItem(kind, name);
+    toast(`已创建 ${r.fileName}`);
+    await refreshMeta();
+    await refreshItems();
+    // 从刷新后的列表取新条目进编辑器；带筛选时可能不在当前列表，回退单条重取
+    const item = state.items.find((i) => i.id === r.id) || await api.item(r.id);
+    openEditor(item);
+  } catch (e) { toast(e.message, 'err'); }
+}
+
 // ============ 刷新入口 ============
 
 export async function refreshMeta() {
@@ -633,6 +706,9 @@ export async function refreshMeta() {
 export function initShell() {
   // 侧栏手风琴（单开互斥）
   initAccordion();
+
+  // 「新建」按钮 + 下拉菜单（v0.6.0）
+  initCreateButton();
 
   // 搜索
   const search = $('#search');

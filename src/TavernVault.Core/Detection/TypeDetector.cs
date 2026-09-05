@@ -7,11 +7,14 @@ namespace TavernVault.Core.Detection;
 /// <summary>基于文件内容（而非所在文件夹）识别资源类型。</summary>
 public static class TypeDetector
 {
-    // ST 主题文件的特征字段（出现多个即判定为美化主题）
+    // ST 主题文件的特征字段（出现多个即判定为美化主题）。
+    // v0.6.0 对齐官方 power-user.js 的 themeProperties：
+    //   italics_color→italics_text_color、quote_color→quote_text_color（原键名官方不存在），
+    //   补 blur_tint_color；bogus_folders 经官方源码核实存在（power_user.bogus_folders），保留。
     private static readonly string[] ThemeKeys =
     [
-        "custom_css", "blur_strength", "main_text_color", "italics_color",
-        "quote_color", "shadow_color", "avatar_style", "chat_display",
+        "custom_css", "blur_strength", "main_text_color", "italics_text_color",
+        "quote_text_color", "blur_tint_color", "shadow_color", "avatar_style", "chat_display",
         "bogus_folders", "fast_ui_mode", "movingUI", "theme_color",
     ];
 
@@ -38,6 +41,8 @@ public static class TypeDetector
             return ItemKind.Character;
 
         // 酒馆助手脚本 / ST 正则
+        // （v0.6.1：官方 sysprompt 文件 {name, content, post_history} 同样落入此规则——
+        //   与裸 {name, content} 一样无法与脚本可靠区分，统一按脚本归类）
         if (obj["name"] is not null && obj["content"] is not null)
             return ItemKind.Script;
         if (obj["scriptName"] is not null && obj["findRegex"] is not null)

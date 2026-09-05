@@ -1,4 +1,4 @@
-# 酒馆资源管家 (TavernVault)
+# <img src="src/TavernVault.App/wwwroot/favicon.svg" width="30" alt="TavernVault 图标"> 酒馆资源管家 (TavernVault)
 
 集中管理 SillyTavern（酒馆）资源的 Windows 桌面应用：角色卡、世界书、预设、美化主题、脚本——不再散落在文件夹里翻找。
 
@@ -78,7 +78,7 @@ dotnet build TavernVault.slnx -c Release
 ## 测试与质量
 
 ```bash
-dotnet test TavernVault.slnx -c Release   # 单元 93 + 集成 14（真实 Kestrel + 隔离临时库，永不触碰真实库）
+dotnet test TavernVault.slnx -c Release   # 单元 93 + 集成 16（真实 Kestrel + 隔离临时库，永不触碰真实库）
 node tests/preset-model.test.mjs          # 预设写回纯函数 18（无框架，退出码即结果）
 python tests/smoke_api.py                 # API 冒烟 207（先以 --server 模式起服务，见文件头说明）
 ```
@@ -110,7 +110,7 @@ GitHub Actions 每次 push / PR 自动执行构建与全部测试（[`.github/wo
 
 | 版本 | 主题 |
 |---|---|
-| v0.7.x | 预设可视化三期 → 酒馆只读托管+导出副本 → 自动重扫 → 收纳入库 → 集成测试+CI → 内嵌书合入 → 便携模式（明细见开发文档 §9.1） |
+| v0.7.x | 预设可视化三期 → 酒馆只读托管+导出副本 → 自动重扫 → 收纳入库 → 集成测试+CI → 内嵌书合入 → 便携模式 → 应用图标（明细见开发文档 §9.1） |
 | v0.6.x | 格式对齐（5 类模板分类回撤）+ 新建文件 + 自包含打包 |
 | v0.5.x | 安全与可靠性加固系列：会话令牌、备份加固、编辑器重构、UI 清单、奥卡姆修剪 |
 | v0.4.x | 酒馆接入、多库管理、三逻辑库、手风琴布局 |
@@ -118,7 +118,11 @@ GitHub Actions 每次 push / PR 自动执行构建与全部测试（[`.github/wo
 
 ## 路线图
 
-完整的已完成 / 未完成 / 已砍掉清单见 [`docs/development-handoff.md` §11](docs/development-handoff.md)。当前队列：应用图标 → **开放仓库前的全量隐私审计（v1.0.0 门禁）**。
+完整的已完成 / 未完成 / 已砍掉清单见 [`docs/development-handoff.md` §11](docs/development-handoff.md)。当前队列：**开放仓库前的全量隐私审计（v1.0.0 门禁）**。
+
+## 图标
+
+应用图标由 [`tools/gen_icon.py`](tools/gen_icon.py) 生成（烧瓶 = 酒馆·药剂意象，锁孔 = Vault 保险库意象，靛蓝药液对齐应用主题色），单一几何源同时产出 `.ico`（exe + 窗口，256→16 共 7 档，小尺寸自动省略细节）与网页 favicon（SVG + PNG）。改配色或造型后重跑脚本即可再生。
 
 ## 许可证
 

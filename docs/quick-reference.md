@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-05 · 对应 v0.7.7
+> 最后更新：2026-09-05 · 对应 v0.7.8
 
 ## 一分钟了解
 
@@ -45,6 +45,7 @@ node tests/preset-model.test.mjs           # 预设写回纯函数测试（无�
 | `main.js` | 入口：主题切换、启动加载、设置弹窗（库根管理/接入向导/备份设置）、版本号 |
 | `app.js` | 主界面：**三逻辑库选项卡**（局外存储/SillyTavern/TauriTavern，切库重置 kind/dir/root/tag、保留搜索/收藏/排序）、每库类型+子目录二级导航、网格/列表、详情抽屉、备份弹窗 |
 | `editor.js` | 编辑器：角色卡表单+原始JSON、世界书/内嵌书条目、预设可视化、原文编辑 |
+| `preset-model.js` | 预设 prompt_order 写回纯函数（pickGroup/reorder/add/remove，Node 测试 18 项） |
 | `api.js` | fetch 封装：`get/post/put/del` 独立导出 + `api` 对象 |
 | `util.js` | 通用工具（格式化、转义等） |
 

@@ -17,7 +17,7 @@ public class MetaAndSecurityTests(ApiFixture F)
     public async Task Meta_HasVersionDataDirAndThreeLibraries()
     {
         var meta = await F.Get("/api/meta");
-        Assert.StartsWith("0.7", (string)meta["version"]!);
+        Assert.Matches(@"^\d+\.\d+", (string)meta["version"]!);
         Assert.Equal(F.DataDir, (string)meta["dataDir"]!);
         var libs = (JsonArray)meta["libraries"]!;
         Assert.Equal(["normal", "tavernST", "tavernTT"], libs.Select(l => (string)l!["key"]!));

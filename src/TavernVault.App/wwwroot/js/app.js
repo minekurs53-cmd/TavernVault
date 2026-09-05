@@ -342,14 +342,17 @@ async function toggleFavorite(item, btn) {
 export async function openDrawer(id) {
   state.selectedId = id;
   const cached = state.items.find((i) => i.id === id);
-  if (!cached) return;
   const overlay = $('#drawer-overlay');
   overlay.hidden = false;
-  // 重取最新条目：409（文件已被外部修改）后缓存里的 modifiedAt 已过期，重开抽屉必须拿到新鲜时间戳（v0.5.2 N5）
+  // 重取最新条目：409（文件已被外部修改）后缓存里的 modifiedAt 已过期，重开抽屉必须拿到新鲜时间戳（v0.5.2 N5）。
+  // 缓存未命中也照常取：跨库跳转（导出副本/修改历史，v0.7.1）时条目不在当前过滤视图里。
   let item = cached;
   try {
     item = await api.item(id);
-  } catch (e) { toast(e.message, 'err'); } // 取失败退回缓存条目渲染
+  } catch (e) {
+    toast(e.message, 'err');
+    if (!cached) { overlay.hidden = true; return; } // 缓存也没有且取失败：关回抽屉
+  }
   if (overlay.hidden) return; // 等待期间已被关闭（v0.5.2）
   renderDrawer(item);
   $('#drawer-overlay').querySelector('.drawer-close').focus();
@@ -370,6 +373,7 @@ function renderDrawer(item) {
     : `<span class="ico" style="color:${km.color}">${icon(km.icon)}</span>`;
 
   const canEdit = ['character', 'lorebook', 'preset', 'theme', 'script', 'text'].includes(item.kind);
+  const isTavern = !!item.rootSource; // 酒馆来源：就地编辑已退役（v0.7.1），仅可导出副本
   const stats = [
     { k: '类型', v: `${km.label}${item.hasEmbeddedCard ? ' · 内嵌卡' : ''}` },
     { k: '大小', v: fmtSize(item.sizeBytes) },
@@ -408,8 +412,9 @@ function renderDrawer(item) {
           ${stats.map((s) => `<div class="stat ${s.wide ? 'wide' : ''}"><span>${s.k}</span><b title="${escapeHtml(s.v)}">${escapeHtml(s.v)}</b></div>`).join('')}
         </div>
         <div class="drawer-actions">
-          ${canEdit ? `<button class="btn primary" data-act="edit"><span class="ico">${icon('edit')}</span>编辑</button>` : ''}
-          ${item.hasCharacterBook ? `<button class="btn" data-act="editbook" style="grid-column:span 2;justify-content:center"><span class="ico">${icon('lorebook')}</span>编辑内置世界书（${item.entryCount} 条）</button>` : ''}
+          ${canEdit && !isTavern ? `<button class="btn primary" data-act="edit"><span class="ico">${icon('edit')}</span>编辑</button>` : ''}
+          ${canEdit && !isTavern && item.hasCharacterBook ? `<button class="btn" data-act="editbook" style="grid-column:span 2;justify-content:center"><span class="ico">${icon('lorebook')}</span>编辑内置世界书（${item.entryCount} 条）</button>` : ''}
+          ${isTavern ? `<button class="btn primary" data-act="export" title="复制到局外存储后即可自由编辑；编辑完用酒馆自带的导入功能写回"><span class="ico">${icon('copy')}</span>导出副本到局外存储</button>` : ''}
           <button class="btn" data-act="reveal"><span class="ico">${icon('folder')}</span>打开所在文件夹</button>
           <button class="btn" data-act="rename"><span class="ico">${icon('edit')}</span>重命名</button>
           <button class="btn" data-act="move"><span class="ico">${icon('move')}</span>移动到…</button>
@@ -442,6 +447,14 @@ function renderDrawer(item) {
       if (act === 'editbook') openBookEditor(item);
       if (act === 'backups') showBackups(item);
       if (act === 'reveal') { await api.reveal(item.id); }
+      // 导出副本（酒馆来源专用，v0.7.1）：复制到第一个局外库根 → 直接打开副本详情
+      if (act === 'export') {
+        const r = await api.exportItem(item.id);
+        toast(`已导出：${r.fileName}（局外存储根目录，可直接编辑）`);
+        await refreshMeta();
+        await refreshItems();
+        openDrawer(r.id);
+      }
       if (act === 'copy') {
         await navigator.clipboard.writeText(item.fullPath);
         toast('路径已复制');
@@ -543,6 +556,46 @@ async function showBackups(item) {
     }
   };
   renderList(list);
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('[data-act=close]')) mask.remove();
+  });
+}
+
+// 修改历史（v0.7.1）：应用内改过的文件，按最近写入倒序——解决"改了文件但忘了文件名"的查找难题。
+// 数据源是备份清单（每次保存/还原/重命名/移动前都会先备份），酒馆侧的直接改动不经应用、不会出现。
+export async function showHistory() {
+  let rows = [];
+  try {
+    rows = (await api.history()).rows || [];
+  } catch (e) { toast(e.message, 'err'); return; }
+  const body = el(`
+    <div>
+      <h3>修改历史</h3>
+      <p>你在应用内保存 / 还原 / 重命名 / 移动过的文件，按最近写入排序（最多 100 条）。点击条目打开详情。酒馆内的直接改动不经过应用，不会出现在这里。</p>
+      <div class="backup-list"></div>
+      <div class="m-actions">
+        <button class="btn" data-act="close">关闭</button>
+      </div>
+    </div>`);
+  const mask = openModal(body);
+  const box = body.querySelector('.backup-list');
+  if (!rows.length) {
+    box.appendChild(el('<div class="empty" style="padding:16px">还没有记录——在应用内编辑保存后会自动出现</div>'));
+  }
+  for (const r of rows) {
+    const row = el(`<div class="backup-item" style="cursor:pointer" title="打开详情">
+      <span class="b-time">${escapeHtml(new Date(r.lastModified).toLocaleString())}</span>
+      <span style="flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.fileName)}</span>
+      <span class="chip">${escapeHtml(r.kindLabel)}</span>
+      <span class="b-size">改过 ${r.edits} 次</span>
+    </div>`);
+    row.addEventListener('click', async () => {
+      mask.remove();
+      closeDrawer();
+      openDrawer(r.id);
+    });
+    box.appendChild(row);
+  }
   body.addEventListener('click', (e) => {
     if (e.target.closest('[data-act=close]')) mask.remove();
   });

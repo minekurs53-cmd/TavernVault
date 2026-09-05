@@ -72,6 +72,11 @@ function mountEditor(item, title, tabsHtml = '') {
 }
 
 export async function openEditor(item) {
+  if (item.rootSource) {
+    // 酒馆来源就地编辑已退役（v0.7.1）：外部修改不会被酒馆实时读取，还可能被酒馆回写覆盖
+    toast('酒馆来源文件不支持就地编辑，请在详情页使用「导出副本」', 'err');
+    return;
+  }
   const editable = ['character', 'lorebook', 'preset', 'theme', 'script', 'text'];
   if (!editable.includes(item.kind)) {
     toast('该类型暂不支持在程序内编辑', 'err');

@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-05 · 对应 v0.7.0
+> 最后更新：2026-09-05 · 对应 v0.7.1
 
 ## 一分钟了解
 
@@ -66,10 +66,10 @@ GET /api/categories                    # 按根+目录聚合
 
 ### 编辑（全部走 备份→写→重扫）
 ```
-GET/PUT /api/cards/{id}                # PUT: {fields,alternateGreetings,tags} 或 {card} 整卡
-GET/PUT /api/cards/{id}/book           # 内嵌世界书；条目带 raw 时保形合并
+GET/PUT /api/cards/{id}                # PUT: {fields,alternateGreetings,tags} 或 {card} 整卡；酒馆源 403
+GET/PUT /api/cards/{id}/book           # 内嵌世界书；条目带 raw 时保形合并；酒馆源 403
 GET/PUT /api/lore/{id}                 # 世界书
-GET/PUT /api/text/{id}                 # 文本；.json 保存前校验
+GET/PUT /api/text/{id}                 # 文本；.json 保存前校验；酒馆源 403
 ```
 
 ### 另存为（自动命名 `原名-副本 yyyy-MM-dd_HHmmss`）
@@ -96,7 +96,9 @@ POST /api/items/{id}/tags              # {tags:[...]}
 POST /api/items/{id}/rename            # {name,force?}  酒馆源需 force
 POST /api/items/{id}/move              # {root,dir,force?} 目标根必须已登记
 POST /api/items/{id}/delete            # 进回收站
-POST /api/reveal                       # {id} 资源管理器定位
+POST /api/items/{id}/export            # 酒馆源导出副本到第一个局外库根（v0.7.1，局外源 400）
+GET  /api/history                      # 修改历史：应用内改过的文件按最近写入倒序（v0.7.1，上限 100）
+POST /api/reveal                       # {id} 资源管理器定位；{dataDir:true} 打开数据目录（⚠️ 有桌面副作用，冒烟禁用）
 ```
 
 ### 库根 / 酒馆
@@ -158,6 +160,10 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 | 启动后库全空但资源还在 | settings.json 损坏被重置（坏文件已保留为 `settings.json.corrupt-*`，日志与 `/api/meta.settingsWarning` 有告警）：重新登记库目录后重扫即可找回收藏/标签（索引有 `index.bak` 留档） |
 | 库里出现 `xxx.png.tmp-xxxx` 之类残片 | 旧版残留（v0.5.1 起扫描已过滤 `.tmp` 前缀且写失败自动清理），手动删除即可 |
 | 酒馆源文件改名被拒 (403) | 预期护栏；确认风险后请求体加 `force:true` |
+| 酒馆文件没有编辑按钮 / PUT 返回 403 | v0.7.1 预期行为：酒馆不实时读外部修改、还会用内存旧数据回写覆盖，就地编辑已退役。点「导出副本到局外存储」→ 编辑副本 → 用酒馆自带导入写回 |
+| 在应用里改了文件，酒馆里看不到 | 同上——外部修改酒馆不会实时/可靠读取；且酒馆界面操作可能把旧数据写回覆盖你的修改（资源管家重进也看不到的原因）。可靠路径只有导出副本+酒馆自带导入 |
+| 改过的文件忘了是哪个 | 侧栏「修改历史」：应用内保存/还原/重命名/移动过的文件按最近写入倒序，点击直达详情（酒馆侧直接改动不在此列） |
+| 数据/备份/日志存在哪 | 库设置「存储位置」显示数据目录路径，可一键打开；备份默认在其 `backups\` 下，可自定义 |
 | 旧索引缺新字段 | 版本门控没触发？确认 `IndexVersion` 已 +1 |
 | 修改后收藏/标签丢失 | 检查重命名/移动路径是否调了 `GetUserData`→`SetUserData` 迁移 |
 | 整窗一起滚 | 已修复（v0.4.3）：`html/body overflow:hidden` + `#content flex:1 min-height:0 overflow-y:auto`。新布局元素若破坏滚动隔离，检查中间是否缺 `min-height:0`（flex 子项默认 min-height:auto 会撑破） |

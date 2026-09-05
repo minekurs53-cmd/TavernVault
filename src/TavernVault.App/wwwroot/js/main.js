@@ -2,7 +2,7 @@
 
 import { api, get, post } from './api.js';
 import { $, icon, hydrateIcons, toast, escapeHtml, openModal, confirmDialog } from './util.js';
-import { state, initShell, refreshItems, refreshMeta, renderSidebar } from './app.js';
+import { state, initShell, refreshItems, refreshMeta, renderSidebar, showHistory } from './app.js';
 
 // ---- 主题 ----
 function initTheme() {
@@ -34,6 +34,11 @@ export async function showSettings() {
     <div class="add-root-row" style="margin-top:6px">
       <button class="btn" id="set-tavern-connect" style="width:100%">接入酒馆（自动检测 SillyTavern / TauriTavern）</button>
     </div>
+    <div class="m-section-title">存储位置</div>
+    <div class="add-root-row" style="margin-bottom:10px">
+      <input type="text" id="set-datadir" readonly title="设置、索引、备份（默认）、缩略图与日志都在这个目录">
+      <button class="btn" id="set-datadir-open"><span class="ico">${icon('folder')}</span>打开数据目录</button>
+    </div>
     <div class="m-section-title">备份</div>
     <div class="toggle-row">
       <label class="toggle"><input type="checkbox" id="set-autobackup"> 编辑/还原前自动备份原文件</label>
@@ -51,11 +56,18 @@ export async function showSettings() {
       <button class="btn primary" data-act="close">完成</button>
     </div>
     <p style="margin-top:12px;font-size:11px;color:var(--text-3)">
-      收藏与标签保存在 %APPDATA%\\TavernVault；删除资源只是移入系统回收站。
+      删除资源只是移入系统回收站；左侧「修改历史」可查最近改过的文件。
     </p>`;
 
   const mask = openModal(body);
   hydrateIcons(body);
+
+  // 数据目录回显（v0.7.1）：设置/索引/备份/日志都在这里，一键打开
+  const dataDirInput = body.querySelector('#set-datadir');
+  dataDirInput.value = state.meta?.dataDir || '（未知）';
+  body.querySelector('#set-datadir-open').addEventListener('click', async () => {
+    try { await api.revealDataDir(); } catch (e) { toast(e.message, 'err'); }
+  });
 
   // 备份设置回显与保存
   const stats = await get('/api/backups/stats').catch(() => null);
@@ -278,6 +290,7 @@ async function boot() {
   initShell();
 
   $('#btn-rescan').addEventListener('click', doRescan);
+  $('#btn-history').addEventListener('click', showHistory);
   $('#btn-settings').addEventListener('click', showSettings);
   $('#filter-clear').addEventListener('click', () => {
     Object.assign(state.filter, { kind: null, tag: null, fav: false, q: '', dir: null, root: null });

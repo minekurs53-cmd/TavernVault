@@ -28,6 +28,8 @@ jobs:
 
       - name: API 冒烟（同一数据目录单轮）
         shell: bash
+        env:
+          PYTHONIOENCODING: utf-8 # runner 控制台非 UTF-8，中文输出会 UnicodeEncodeError
         run: |
           ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe --server --port=47999 --data=testdata-server &
           sleep 8

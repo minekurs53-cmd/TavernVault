@@ -160,6 +160,7 @@ public static class ApiServer
                 }).ToList(),
                 lastScanAt = vault.LastScanAt,
                 settingsWarning = CombinedWarning(vault.SettingsWarning, vault.Backups.LoadWarning),
+                dataDir = vault.DataDir,
                 version = typeof(ApiServer).Assembly.GetName().Version?.ToString(4),
             });
         }));
@@ -239,6 +240,7 @@ public static class ApiServer
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
+            if (TavernEditGuard(item) is { } g1) return g1;
 
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             if (body is null) return Err("请求体格式错误", 400);
@@ -385,6 +387,55 @@ public static class ApiServer
             return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath), fileName = Path.GetFileName(newPath) });
         }));
 
+        // ---------- 导出副本（v0.7.1，酒馆来源专用） ----------
+        // 把酒馆目录里的文件字节级复制到第一个局外库根（"原名-副本 时间戳"命名），副本可直接编辑。
+        // 这是编辑酒馆资源的可靠路径的第一步：导出 → 编辑副本 → 酒馆自带导入写回。
+        app.MapPost("/api/items/{id}/export", (HttpContext ctx, string id) => Handle(ctx, () =>
+        {
+            var item = vault.Find(id);
+            if (item is null) return Err("条目不存在", 404);
+            if (item.RootSource == LibrarySource.Normal)
+                return Err("该文件已在局外存储，可直接编辑，无需导出", 400);
+            var targetRoot = vault.Settings.LibraryRoots
+                .FirstOrDefault(r => r.Source == LibrarySource.Normal)?.Path;
+            if (targetRoot is null)
+                return Err("尚未登记局外存储库根：请先在「库设置」添加一个普通库目录作为导出目标", 400);
+            var newPath = FileOperations.GetSaveAsPath(Path.Combine(targetRoot, item.FileName));
+            File.Copy(item.FullPath, newPath);
+            vault.UpsertItem(newPath);
+            AppLog.Info($"导出副本：{item.FullPath} → {newPath}");
+            return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath), fileName = Path.GetFileName(newPath) });
+        }));
+
+        // ---------- 修改历史（v0.7.1） ----------
+        // 程序内每次写入前都会自动备份 → 备份清单即"我在应用里改过哪些文件"的权威记录。
+        // 按原文件聚合取最近写入时间倒序（含条目当前 id，前端可直达详情）；酒馆侧的外部改动不经此记录。
+        app.MapGet("/api/history", (HttpContext ctx) => Handle(ctx, () =>
+        {
+            var rows = vault.Backups.All()
+                .Where(b => File.Exists(b.OriginalPath))
+                .GroupBy(b => b.OriginalPath, StringComparer.OrdinalIgnoreCase)
+                .Select(g =>
+                {
+                    var path = g.Key;
+                    var item = vault.Find(LibraryScanner.ComputeId(path));
+                    return new
+                    {
+                        id = LibraryScanner.ComputeId(path),
+                        fileName = Path.GetFileName(path),
+                        kind = ItemKindText.KeyOf(item?.Kind ?? ItemKind.Other),
+                        kindLabel = ItemKindText.LabelOf(item?.Kind ?? ItemKind.Other),
+                        rootSource = (int)(item?.RootSource ?? LibrarySource.Normal),
+                        lastModified = g.Max(b => b.SavedAt),
+                        edits = g.Count(),
+                    };
+                })
+                .OrderByDescending(r => r.lastModified)
+                .Take(100)
+                .ToList();
+            return Json(new { rows });
+        }));
+
         // ---------- 新建文件（v0.6.0） ----------
         // body: { kind, name, root? } —— 按空白模板创建文件并登记索引。
         // 护栏哲学：仅普通库根可新建，酒馆来源的文件由酒馆按路径/文件名引用，禁止从这里写入。
@@ -478,6 +529,7 @@ public static class ApiServer
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
+            if (TavernEditGuard(item) is { } g2) return g2;
 
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             if (body?["entries"] is not JsonArray list) return Err("请求体格式错误", 400);
@@ -568,6 +620,7 @@ public static class ApiServer
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Lorebook) return Err("不是世界书", 400);
+            if (TavernEditGuard(item) is { } g3) return g3;
 
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             if (body?["entries"] is not JsonArray list) return Err("请求体格式错误", 400);
@@ -630,6 +683,7 @@ public static class ApiServer
         {
             var item = vault.Find(id);
             if (item is null) return Results.NotFound();
+            if (TavernEditGuard(item) is { } g4) return g4;
             if (!TextExtensions.Contains(Path.GetExtension(item.FullPath))) return Err("该文件类型不支持文本编辑", 400);
 
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
@@ -787,6 +841,12 @@ public static class ApiServer
         app.MapPost("/api/reveal", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var body = await JsonNode.ParseAsync(req.Body);
+            // {dataDir:true}：打开数据目录（设置/索引/备份/日志所在，v0.7.1 起在库设置中展示）
+            if (body?["dataDir"] is JsonValue dv && dv.TryGetValue<bool>(out var wantDir) && wantDir)
+            {
+                FileOperations.RevealInExplorer(vault.DataDir);
+                return Json(new { ok = true });
+            }
             var item = vault.Find(body?["id"]?.GetValue<string>() ?? "");
             if (item is null) return Results.NotFound();
             FileOperations.RevealInExplorer(item.FullPath);
@@ -943,6 +1003,19 @@ public static class ApiServer
 
     private static IResult Err(string message, int code) =>
         Results.Json(new { error = message }, statusCode: code);
+
+    // ---- 酒馆来源就地编辑守卫（v0.7.1） ----
+    // 实测确认：酒馆不会实时读取外部修改，角色卡等还被酒馆常驻内存缓存，
+    // 界面操作会用旧数据回写覆盖外部编辑（冷生效同样不可靠）。
+    // 酒馆资源的可靠编辑路径 = 「导出副本」到局外库根 → 编辑副本 → 酒馆自带导入写回。
+    private static readonly string TavernEditBlockedMsg =
+        "酒馆来源文件不支持就地编辑：酒馆不会实时读取外部修改，且界面操作可能用内存中的旧数据回写覆盖。"
+        + "请在详情页使用「导出副本」到局外存储后编辑，再通过酒馆自带的导入功能写回。";
+
+    /// <summary>酒馆来源（ST/TT）条目禁止就地编辑，返回 403；局外来源返回 null 放行。</summary>
+    private static IResult? TavernEditGuard(LibraryItem item) =>
+        item.RootSource == LibrarySource.Normal ? null : Err(TavernEditBlockedMsg, 403);
+
 
     // ---- 库根序列化 / 来源解析 ----
     private static List<object> SerializeRoots(Vault v) =>

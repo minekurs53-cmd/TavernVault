@@ -44,6 +44,12 @@ public sealed class BackupStore
     /// <summary>当前备份目录（供设置界面回显）。</summary>
     public string Dir => _dir;
 
+    /// <summary>全部备份记录（manifest 原序，旧→新）。供「修改历史」聚合视图使用；调用方自行按原文件过滤/排序。</summary>
+    public List<BackupInfo> All()
+    {
+        lock (_lock) return [.. _manifest];
+    }
+
     /// <summary>
     /// 更换备份目录：两阶段迁移（v0.5.2 重写，修复 P1-3）。
     /// 阶段一为纯复制：逐个复制到新目录并校验长度，任一失败即清理本次已复制的产物并原样抛出，

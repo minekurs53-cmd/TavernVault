@@ -498,18 +498,48 @@ tcard_id = r["id"]  # 重命名后 id 随路径变化
 code = call_code("POST", f"/api/items/{tlore_id}/move", {"root": TAVERN, "dir": ""})
 check("move 无 force 403", code == 403, f"HTTP {code}")
 
-# 强制备份：酒馆源无视 autoBackup 开关；普通源关闭后不备
-call("POST", "/api/settings/backup", {"autoBackup": False})
-bk_before = len(call("GET", f"/api/items/{tcard_id}/backups"))
-r = call("PUT", f"/api/cards/{tcard_id}", {"fields": {"description": "酒馆卡改描述"}})
-bk_after = call("GET", f"/api/items/{tcard_id}/backups")
-check("酒馆源无视开关仍备份", (r or {}).get("ok") is True and not (r or {}).get("warnings")
-      and len(bk_after) == bk_before + 1, f"{bk_before} → {len(bk_after)}")
+# v0.7.1：酒馆来源禁止就地编辑（PUT 403，cards/text/lore 三路）——
+# 实测酒馆不实时读外部修改且可能用内存旧数据回写覆盖，编辑走「导出副本」
+card_desc_before = call("GET", f"/api/cards/{tcard_id}")["card"]["data"].get("description")
+code = call_code("PUT", f"/api/cards/{tcard_id}", {"fields": {"description": "不应写入"}})
+check("酒馆源 cards PUT 403", code == 403, f"HTTP {code}")
+code = call_code("PUT", f"/api/text/{tlore_id}", {"content": "{}"})
+check("酒馆源 text PUT 403", code == 403, f"HTTP {code}")
+lore_cur = call("GET", f"/api/lore/{tlore_id}")
+code = call_code("PUT", f"/api/lore/{tlore_id}", {"entries": lore_cur.get("entries") or [],
+                                                  "container": lore_cur.get("container") or "object"})
+check("酒馆源 lore PUT 403", code == 403, f"HTTP {code}")
+check("403 未写入文件", call("GET", f"/api/cards/{tcard_id}")["card"]["data"].get("description") == card_desc_before,
+      str(card_desc_before)[:60])
+
+# 导出副本：酒馆源 → 第一个局外库根（TESTDATA），字节级复制，副本可直接编辑
+r = call("POST", f"/api/items/{tcard_id}/export", {})
+check("酒馆源导出副本 ok", (r or {}).get("ok") is True and "-副本" in (r or {}).get("fileName", ""), str(r)[:80])
+exp_items = [i for i in call("GET", "/api/items?kind=character&q=" + urllib.parse.quote("酒馆卡"))
+             if i["fileName"].startswith("酒馆卡改名-副本")]
+check("导出副本入库（普通源）", len(exp_items) == 1 and exp_items[0]["rootSource"] == 0,
+      str([(i["fileName"], i["rootSource"]) for i in exp_items]))
+r = call("PUT", f"/api/cards/{exp_items[0]['id']}", {"fields": {"description": "导出后可编辑"}})
+check("导出副本可编辑", (r or {}).get("ok") is True, str(r)[:60])
+for row in exp_items:  # 副本清理（回收站）
+    call("POST", f"/api/items/{row['id']}/delete", {})
 
 png_items = call("GET", "/api/items?kind=character&q=" + urllib.parse.quote("图像卡"))
 check("普通卡夹具就绪", len(png_items) == 1 and png_items[0]["fileName"] == "图像卡.png",
       str([i["fileName"] for i in png_items]))
 png_id = png_items[0]["id"]
+code = call_code("POST", f"/api/items/{png_id}/export", {})
+check("局外源导出 400", code == 400, f"HTTP {code}")
+
+# 强制备份：酒馆源无视 autoBackup 开关（rename force 是仅存的酒馆写入路径）；普通源关闭后不备
+call("POST", "/api/settings/backup", {"autoBackup": False})
+bk_before = len(call("GET", f"/api/items/{tcard_id}/backups"))
+r = call("POST", f"/api/items/{tcard_id}/rename", {"name": "酒馆卡改名2", "force": True})
+bk_after = call("GET", f"/api/items/{tcard_id}/backups")
+check("酒馆源无视开关仍备份", (r or {}).get("ok") is True and len(bk_after) == bk_before + 1,
+      f"{bk_before} → {len(bk_after)}")
+tcard_id = r["id"]  # 重命名后 id 随路径变化
+
 png_bk_before = len(call("GET", f"/api/items/{png_id}/backups"))
 r = call("PUT", f"/api/cards/{png_id}", {"fields": {}})
 png_bk_after = call("GET", f"/api/items/{png_id}/backups")
@@ -801,6 +831,29 @@ check("新建文件段已清理", all(
     call("GET", f"/api/items/{rid}") == {"error": "条目不存在"} for rid in created_ids))
 leftover = [fn for fn in os.listdir(TESTDATA) if fn.startswith("冒烟新建")]
 check("新建文件磁盘已清理", leftover == [], str(leftover))
+
+print("== 数据目录与修改历史（v0.7.1）==")
+# 此前酒馆段把 autoBackup 关了又已恢复 true；先做一次会留备份记录的编辑，保证历史有本条目
+r = call("PUT", f"/api/cards/{png_id}", {"fields": {}})
+check("history 前置编辑成功", (r or {}).get("ok") is True, str(r)[:60])
+meta = call("GET", "/api/meta")
+check("meta 带 dataDir", isinstance(meta.get("dataDir"), str) and "testdata-server" in meta["dataDir"],
+      str(meta.get("dataDir"))[:80])
+h = call("GET", "/api/history")
+rows = h.get("rows") or []
+check("history 列表按时间倒序", isinstance(rows, list) and all(
+    rows[i]["lastModified"] >= rows[i + 1]["lastModified"] for i in range(len(rows) - 1)),
+    f"{len(rows)} 行")
+top = next((r for r in rows if r["fileName"] == "图像卡.png"), None)
+check("history 记录本轮写过的图像卡", top is not None, str([r["fileName"] for r in rows[:5]]))
+check("history 行含 kind/edits/rootSource",
+      top is not None and top["kind"] == "character" and top["edits"] >= 1 and top["rootSource"] == 0,
+      str(top)[:140])
+check("history 条目 id 可直达详情", top is not None and call("GET", f"/api/items/{top['id']}")["fileName"] == "图像卡.png")
+# 注意：reveal（含 dataDir）会真的在桌面弹出资源管理器窗口——有桌面副作用，不做真实调用的冒烟断言，
+# 仅验证未匹配条目时的 404 合同（不会打开任何窗口）
+code = call_code("POST", "/api/reveal", {"id": "unknownid0000"})
+check("reveal 未知条目 404", code == 404, f"HTTP {code}")
 
 print("== 错误合同（v0.5.2 回归）==")
 code = call_code("GET", "/api/items/unknownid0000")

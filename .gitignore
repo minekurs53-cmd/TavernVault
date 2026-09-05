@@ -8,3 +8,4 @@ testdata-server/
 .smoke/
 __pycache__/
 dist/
+屏幕截图*.png

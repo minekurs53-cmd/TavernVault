@@ -586,7 +586,7 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 2. **`dotnet build` 增量构建偶发不拷贝 wwwroot**。已在 `TavernVault.App.csproj` 加 `CopyFrontendFiles` Target（AfterTargets=Build，按时间戳强制同步）。若仍怀疑前端没更新，直接对比 `bin/.../wwwroot` 与 `src/.../wwwroot` 的时间戳/大小。
 3. **仓库体积会悄悄增长**：窗口模式运行时 WebView2 把浏览器缓存写在 `bin/.../TavernVault.exe.WebView2\`（曾积累 69M）。该目录可随时整体删除（自动重建）；`--server` 无窗口模式不产生。
 4. **前端语法校验必须用 `.mjs`**：`node --check x.js` 按 script 模式，抓不到模块级错误（如非 async 函数里用 await、重复 import）。正确做法：`cp x.js /tmp/x.mjs && node --check /tmp/x.mjs`。
-5. **GitHub 直连失败**（国内网络）：本仓库已配置 `git config http.proxy http://127.0.0.1:(端口)`（用户系统代理）。推送前若报 `Failed to connect to github.com`，确认代理在监听 (端口)。
+5. **GitHub 直连失败**（国内网络）：本仓库配置了指向本地代理的 `git config http.proxy`（端口属个人网络配置，不写入仓库）。推送前若报 `Failed to connect to github.com`，确认本地代理在运行。
 
 ---
 
@@ -679,9 +679,13 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 ### v1.0.0 发布门禁（新增，开放仓库前逐项执行，全过才改 public）
 
 - [ ] **隐私全量检查**：`git grep` 真实路径/用户名/令牌模式（`D:\agent`、`C:\Users\<真实用户>`、
-  `sk-` 开头的 API key、私钥块、`(端口)` 代理端口、server-connection 内容）+ `git log --all -p`
+  `sk-` 开头的 API key、私钥块、本地代理端口号、server-connection 内容）+ `git log --all -p`
   全历史扫描 + Issues/PR/Actions 日志核对。v0.7.5 预扫结果：工作区零命中（docs 两处"路径"为
   安全分析示例与测试夹具，历史零密钥）；远程侧（分支/PR/日志）待查。
+  **v0.7.9 全量复核（2026-09-05）**：工作区/全历史树/提交信息/Actions 日志/PR 正文零密钥零机器
+  路径，远程设置核清（协作者仅本人/无 deploy key/无 webhook/无 release）；遗留两处弱标识待裁决——
+  本地代理端口号（历史 docs 排障行 117 处 + 一条提交信息）与 v0.1–v0.2 两个提交的作者名
+  （Windows 账户名，邮箱为 noreply 无碍）；二者清除均需 filter-repo 重写历史 + 双分支 force push。
 - [ ] **仓库设置**：可见性切 public 前核对协作者列表、deploy key、webhook；确认 LICENSE 与
   README 徽章/链接公开后可达。
 - [ ] **发布物**：GitHub Release 挂 dist 自包含包 + 更新说明。
@@ -728,7 +732,7 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 - [ ] 前端改动后用 `.mjs` 方式 `node --check` 全部 5 个 js（api/app/editor/main/util）
 - [ ] 改动 Core 后跑 `dotnet test`；改动 API 后跑 `smoke_api.py`（临时 data 目录，**注意 Git Bash 下 `--data` 用相对路径**）
 - [ ] UI 改动用浏览器截图核对，读 `window.__errs` 确认无模块错误
-- [ ] 提交前 `git status` 确认分支（`qoder/TavernVault`）；推送走代理 (端口)
+- [ ] 提交前 `git status` 确认分支（`qoder/TavernVault`）；推送走本地代理
 - [ ] 任何写操作只在 `testdata/` 临时目录验证，真实库只读
 - [ ] 改动条目模型（`LibraryItem`）记得 `IndexVersion` +1，否则旧索引增量复用会缺新字段
 

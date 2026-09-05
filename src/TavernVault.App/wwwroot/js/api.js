@@ -47,6 +47,8 @@ export const api = {
   saveCard: (id, body) => put(`/api/cards/${id}`, body),
   cardBook: (id) => get(`/api/cards/${id}/book`),
   saveCardBook: (id, body) => put(`/api/cards/${id}/book`, body),
+  // 内嵌世界书合入（v0.7.6）：把独立世界书条目追加进卡片内嵌书
+  importCardBook: (id, sourceId) => post(`/api/cards/${id}/book/import`, { sourceId }),
   saveCardAs: (id, card) => post(`/api/cards/${id}/saveas`, { card }),
   saveLoreAs: (id, entries) => post(`/api/lore/${id}/saveas`, { entries }),
   saveCardBookAs: (id, entries) => post(`/api/cards/${id}/book/saveas`, { entries }),

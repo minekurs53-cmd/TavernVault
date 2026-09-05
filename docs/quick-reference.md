@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-05 · 对应 v0.7.4
+> 最后更新：2026-09-05 · 对应 v0.7.5
 
 ## 一分钟了解
 
@@ -178,6 +178,13 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 - **进位**：主版本 X = 重大重构/不兼容；次版本 Y = 新功能迭代（一次迭代一个小版本）；修订 Z = bug 修复累计（进位时热修段归 0）；热修 F = 发布后紧急修复（不加新功能，连修递增 fix-2…）
 - **显示链同步点**：`TavernVault.App.csproj` `<Version>` → `/api/meta`（读程序集 `ToString(4)`）→ 前端 `main.js updateVersion()` 转换显示。改版本只改 csproj 一处
 - **commit 首行**：`vX.Y.Z(-fixN)：主题`
+
+## 文档维护约定（v0.7.5 起，README 已按此结构化）
+
+- **README**：新功能 → 「功能总览」对应小节加一行（一行讲清用户得到什么；不写版本号括注、不写实现细节）；
+  「版本历程」表加一行主题（≤30 字）。README 不复述原理——细节归 development-handoff，速查归本文件。
+- **development-handoff.md**：每个版本在 §3 新增小节（原理/踩坑/测试）；§9.1 版本表；§9.2 状态；§11 路线图裁决。
+- **quick-reference.md**（本文件）：新端点进 API 速查；新坑进「数据格式坑」/「故障排查」。
 
 文档演进规则（防版本历史无限膨胀）：
 

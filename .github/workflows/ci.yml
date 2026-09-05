@@ -1,0 +1,36 @@
+# TavernVault CI（v0.7.4 起）
+# 构建 + 单元测试/纯函数测试/集成测试 + API 冒烟，全部在 windows runner 上完成
+# （集成测试进程内起真实 Kestrel + 隔离临时库，不触碰真实用户数据；
+#   冒烟走 --server 模式，写操作只作用于 testdata-server 临时目录）。
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: 构建（Release）
+        run: dotnet build TavernVault.slnx -c Release
+
+      - name: 单元测试 + 纯函数测试 + 集成测试
+        run: dotnet test TavernVault.slnx -c Release --no-build
+
+      - name: API 冒烟（同一数据目录单轮）
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8 # runner 控制台非 UTF-8，中文输出会 UnicodeEncodeError
+        run: |
+          ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe --server --port=47999 --data=testdata-server &
+          sleep 8
+          python tests/smoke_api.py

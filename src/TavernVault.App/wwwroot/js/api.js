@@ -66,6 +66,14 @@ export const api = {
   // 新建空白模板文件（v0.6.0）：root 缺省时服务端取第一个普通库根
   createItem: (kind, name, root) => post('/api/items/create', { kind, name, root }),
   reveal: (id) => post('/api/reveal', { id }),
+  revealDataDir: () => post('/api/reveal', { dataDir: true }),
+  // 酒馆来源文件导出副本到局外库根（v0.7.1：就地编辑退役后的编辑入口）
+  exportItem: (id) => post(`/api/items/${id}/export`, {}),
+  // 修改历史：应用内改过的文件（按最近写入倒序，v0.7.1）
+  history: () => get('/api/history'),
+  // 收纳入库（v0.7.3）：散乱文件夹按内容识别分类，批量复制进局外库根类型子目录
+  collectPreview: (source) => post('/api/collect/preview', { source }),
+  collectExecute: (source, root, files, move = false) => post('/api/collect', { source, root, files, move }),
   addRoot: (path, source = 'normal') => post('/api/roots', { path, source }),
   removeRoot: (path) => del('/api/roots', { path }),
   pickFolder: () => post('/api/pick-folder', {}),

@@ -3,6 +3,18 @@
 
 连接信息默认从服务端写出的 server-connection.json 读取（--server 模式产物）；
 TV_CONN / TV_BASE / TV_TOKEN 环境变量可覆写。
+
+覆盖范围总览（2026-09-05 随 v0.7.2 全面复审）：
+- 基础 CRUD：搜索 / 角色卡（字段·整卡·开场白·标签）/ 世界书（对象+数组容器）/ 文本与 JSON 校验 /
+  收藏标签 / 内嵌世界书 / 另存为（自动命名，正向+逃逸回归）/ PNG 完整性 / 重命名移动删除 / 越权防护
+- 可靠性合同：自动备份与还原（含满上限自逐出）/ 409 编辑并发 / 会话令牌 + Host 白名单 / 错误合同
+- 多库与识别：三逻辑库聚合 / 格式识别回落（v0.6.1 回撤 5 类）/ 酒馆子目录探测
+- 酒馆托管（v0.7.1 语义）：护栏 403 矩阵（rename/move/PUT×3）/ 导出副本全链路 / 强制备份（rename force）
+- v0.6.0+：新建文件 6 类模板回路；v0.7.1：修改历史聚合与已删过滤 / meta.dataDir
+- v0.7.2：文件监视自动重扫（直接落盘→自动入库/出库）
+- v0.7.3：收纳入库（散乱夹具 → 分类落位/源不动/move/重名序号/四条负向合同）
+- 永不纳入：reveal 的真实调用（会弹桌面资源管理器窗口，见 v0.7.1 事故记录）；前端逻辑
+  （由 preset-model node 测试 + 浏览器 UI 实跑覆盖）
 """
 import base64
 import json
@@ -214,7 +226,9 @@ check("读取内嵌书 1 条", len(book["entries"]) == 1)
 e0 = book["entries"][0]
 check("Spec→ST 转换", e0["data"]["key"] == ["内置词"] and e0["data"]["order"] == 50 and e0["data"]["position"] == 0)
 check("raw 原条目回传", e0["raw"] is not None and e0["raw"].get("selective") is True)
+
 # 编辑：改内容并禁用，raw 原样回传
+call("POST", "/api/rescan")
 e0["data"]["content"] = "编辑后的内置内容"
 e0["data"]["disable"] = True
 r = call("PUT", f"/api/cards/{card_items[0]['id']}/book", {"entries": book["entries"]})
@@ -498,18 +512,50 @@ tcard_id = r["id"]  # 重命名后 id 随路径变化
 code = call_code("POST", f"/api/items/{tlore_id}/move", {"root": TAVERN, "dir": ""})
 check("move 无 force 403", code == 403, f"HTTP {code}")
 
-# 强制备份：酒馆源无视 autoBackup 开关；普通源关闭后不备
-call("POST", "/api/settings/backup", {"autoBackup": False})
-bk_before = len(call("GET", f"/api/items/{tcard_id}/backups"))
-r = call("PUT", f"/api/cards/{tcard_id}", {"fields": {"description": "酒馆卡改描述"}})
-bk_after = call("GET", f"/api/items/{tcard_id}/backups")
-check("酒馆源无视开关仍备份", (r or {}).get("ok") is True and not (r or {}).get("warnings")
-      and len(bk_after) == bk_before + 1, f"{bk_before} → {len(bk_after)}")
+# v0.7.1：酒馆来源禁止就地编辑（PUT 403，cards/text/lore 三路）——
+# 实测酒馆不实时读外部修改且可能用内存旧数据回写覆盖，编辑走「导出副本」
+card_desc_before = call("GET", f"/api/cards/{tcard_id}")["card"]["data"].get("description")
+code = call_code("PUT", f"/api/cards/{tcard_id}", {"fields": {"description": "不应写入"}})
+check("酒馆源 cards PUT 403", code == 403, f"HTTP {code}")
+code = call_code("PUT", f"/api/text/{tlore_id}", {"content": "{}"})
+check("酒馆源 text PUT 403", code == 403, f"HTTP {code}")
+lore_cur = call("GET", f"/api/lore/{tlore_id}")
+code = call_code("PUT", f"/api/lore/{tlore_id}", {"entries": lore_cur.get("entries") or [],
+                                                  "container": lore_cur.get("container") or "object"})
+check("酒馆源 lore PUT 403", code == 403, f"HTTP {code}")
+check("403 未写入文件", call("GET", f"/api/cards/{tcard_id}")["card"]["data"].get("description") == card_desc_before,
+      str(card_desc_before)[:60])
+
+# 导出副本：酒馆源 → 第一个局外库根（TESTDATA），字节级复制，副本可直接编辑
+r = call("POST", f"/api/items/{tcard_id}/export", {})
+check("酒馆源导出副本 ok", (r or {}).get("ok") is True and "-副本" in (r or {}).get("fileName", ""), str(r)[:80])
+exp_items = [i for i in call("GET", "/api/items?kind=character&q=" + urllib.parse.quote("酒馆卡"))
+             if i["fileName"].startswith("酒馆卡改名-副本")]
+check("导出副本入库（普通源）", len(exp_items) == 1 and exp_items[0]["rootSource"] == 0,
+      str([(i["fileName"], i["rootSource"]) for i in exp_items]))
+r = call("PUT", f"/api/cards/{exp_items[0]['id']}", {"fields": {"description": "导出后可编辑"}})
+check("导出副本可编辑", (r or {}).get("ok") is True, str(r)[:60])
+for row in exp_items:  # 副本清理（回收站）
+    call("POST", f"/api/items/{row['id']}/delete", {})
 
 png_items = call("GET", "/api/items?kind=character&q=" + urllib.parse.quote("图像卡"))
 check("普通卡夹具就绪", len(png_items) == 1 and png_items[0]["fileName"] == "图像卡.png",
       str([i["fileName"] for i in png_items]))
 png_id = png_items[0]["id"]
+code = call_code("POST", f"/api/items/{png_id}/export", {})
+check("局外源导出 400", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/items/unknownid0000/export", {})
+check("export 未知条目 404", code == 404, f"HTTP {code}")
+
+# 强制备份：酒馆源无视 autoBackup 开关（rename force 是仅存的酒馆写入路径）；普通源关闭后不备
+call("POST", "/api/settings/backup", {"autoBackup": False})
+bk_before = len(call("GET", f"/api/items/{tcard_id}/backups"))
+r = call("POST", f"/api/items/{tcard_id}/rename", {"name": "酒馆卡改名2", "force": True})
+bk_after = call("GET", f"/api/items/{tcard_id}/backups")
+check("酒馆源无视开关仍备份", (r or {}).get("ok") is True and len(bk_after) == bk_before + 1,
+      f"{bk_before} → {len(bk_after)}")
+tcard_id = r["id"]  # 重命名后 id 随路径变化
+
 png_bk_before = len(call("GET", f"/api/items/{png_id}/backups"))
 r = call("PUT", f"/api/cards/{png_id}", {"fields": {}})
 png_bk_after = call("GET", f"/api/items/{png_id}/backups")
@@ -801,6 +847,160 @@ check("新建文件段已清理", all(
     call("GET", f"/api/items/{rid}") == {"error": "条目不存在"} for rid in created_ids))
 leftover = [fn for fn in os.listdir(TESTDATA) if fn.startswith("冒烟新建")]
 check("新建文件磁盘已清理", leftover == [], str(leftover))
+
+print("== 数据目录与修改历史（v0.7.1）==")
+# 此前酒馆段把 autoBackup 关了又已恢复 true；先做一次会留备份记录的编辑，保证历史有本条目
+r = call("PUT", f"/api/cards/{png_id}", {"fields": {}})
+check("history 前置编辑成功", (r or {}).get("ok") is True, str(r)[:60])
+meta = call("GET", "/api/meta")
+check("meta 带 dataDir", isinstance(meta.get("dataDir"), str) and "testdata-server" in meta["dataDir"],
+      str(meta.get("dataDir"))[:80])
+h = call("GET", "/api/history")
+rows = h.get("rows") or []
+check("history 列表按时间倒序", isinstance(rows, list) and all(
+    rows[i]["lastModified"] >= rows[i + 1]["lastModified"] for i in range(len(rows) - 1)),
+    f"{len(rows)} 行")
+top = next((r for r in rows if r["fileName"] == "图像卡.png"), None)
+check("history 记录本轮写过的图像卡", top is not None, str([r["fileName"] for r in rows[:5]]))
+check("history 行含 kind/edits/rootSource",
+      top is not None and top["kind"] == "character" and top["edits"] >= 1 and top["rootSource"] == 0,
+      str(top)[:140])
+check("history 条目 id 可直达详情", top is not None and call("GET", f"/api/items/{top['id']}")["fileName"] == "图像卡.png")
+# 注意：reveal（含 dataDir）会真的在桌面弹出资源管理器窗口——有桌面副作用，不做真实调用的冒烟断言，
+# 仅验证未匹配条目时的 404 合同（不会打开任何窗口）
+code = call_code("POST", "/api/reveal", {"id": "unknownid0000"})
+check("reveal 未知条目 404", code == 404, f"HTTP {code}")
+
+# v0.7.2 审计补缺：text saveas 正向（此前只有错 kind 的 400 负向）
+tmp_text = os.path.join(TESTDATA, "冒烟审计文本.txt")
+with open(tmp_text, "w", encoding="utf-8") as f:
+    f.write("审计夹具")
+call("POST", "/api/rescan")
+audit_items = call("GET", "/api/items?kind=text&q=" + urllib.parse.quote("冒烟审计文本"))
+check("审计文本夹具就绪", len(audit_items) == 1, str([i["fileName"] for i in audit_items]))
+r = call("POST", f"/api/text/{audit_items[0]['id']}/saveas", {"content": "另存内容"})
+check("text saveas 正向", (r or {}).get("ok") is True and "-副本" in (r or {}).get("fileName", ""), str(r)[:80])
+saveas_items = call("GET", "/api/items?kind=text&q=" + urllib.parse.quote("冒烟审计文本-副本"))
+check("text saveas 副本入库", len(saveas_items) == 1 and saveas_items[0]["kind"] == "text",
+      str([i["fileName"] for i in saveas_items]))
+
+# v0.7.2 审计补缺：history 过滤已删除文件（原文件不存在 → 不再出现）
+r = call("PUT", f"/api/text/{audit_items[0]['id']}", {"content": "产生一条备份"})
+check("审计文本产生备份", (r or {}).get("ok") is True, str(r)[:60])
+rows_before = call("GET", "/api/history").get("rows") or []
+check("history 含审计文本", any(x["fileName"] == "冒烟审计文本.txt" for x in rows_before))
+for row in (audit_items + saveas_items):
+    call("POST", f"/api/items/{row['id']}/delete", {})
+rows_after = call("GET", "/api/history").get("rows") or []
+check("history 过滤已删除文件", not any(x["fileName"].startswith("冒烟审计文本") for x in rows_after),
+      str([x["fileName"] for x in rows_after[:5]]))
+
+print("== 文件监视自动重扫（v0.7.2）==")
+# 直接落盘/删除文件，不调 /api/rescan——VaultWatcher 防抖（800ms）后应自动增删索引。
+# 这是「外部/酒馆侧改动自动可见」的核心验收；轮询上限 8s 与防抖+重扫耗时无关机器快慢。
+auto_path = os.path.join(TESTDATA, "冒烟自动重扫.json")
+if os.path.exists(auto_path):
+    os.remove(auto_path)
+with open(auto_path, "w", encoding="utf-8") as f:
+    json.dump({"name": "冒烟自动重扫", "content": "watcher"}, f, ensure_ascii=False)
+deadline = time.time() + 8
+found = []
+while time.time() < deadline:
+    found = call("GET", "/api/items?q=" + urllib.parse.quote("冒烟自动重扫"))
+    if len(found) == 1:
+        break
+    time.sleep(0.4)
+check("新文件自动入库（免手动重扫）", len(found) == 1 and found[0]["kind"] == "script",
+      str([(i["fileName"], i["kind"]) for i in found]))
+os.remove(auto_path)
+deadline = time.time() + 8
+gone = None
+while time.time() < deadline:
+    gone = call("GET", "/api/items?q=" + urllib.parse.quote("冒烟自动重扫"))
+    if not gone:
+        break
+    time.sleep(0.4)
+check("删除后自动出库", gone == [], str(gone)[:80])
+
+print("== 收纳入库（v0.7.3）==")
+# 散乱来源夹具（.smoke 下、不是库根——收纳来源无需登记）：混合类型 + 子目录嵌套 + 建议跳过项
+COLLECT_SRC = os.path.abspath(os.path.join(".smoke", "收纳来源"))
+shutil.rmtree(COLLECT_SRC, ignore_errors=True)
+
+
+def collect_write(rel, text):
+    p = os.path.join(COLLECT_SRC, rel)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+collect_write("卡A.json", json.dumps({"spec": "chara_card_v2", "spec_version": "2.0",
+                                      "data": {"name": "收纳卡A", "description": ""}}, ensure_ascii=False))
+collect_write("深层/卡B.json", json.dumps({"spec": "chara_card_v2", "spec_version": "2.0",
+                                           "data": {"name": "收纳卡B", "description": ""}}, ensure_ascii=False))
+collect_write("书A.json", json.dumps({"entries": {}}, ensure_ascii=False))
+collect_write("预设A.json", json.dumps({"name": "P", "prompts": [{"identifier": "main"}],
+                                        "prompt_order": []}, ensure_ascii=False))
+collect_write("美化A.json", json.dumps({"main_text_color": "rgba(0,0,0,1)", "blur_strength": 1}, ensure_ascii=False))
+collect_write("脚本A.js", "console.log(1)")
+collect_write("说明.txt", "hello")
+collect_write("归档.zip", "PK")
+
+preview = call("POST", "/api/collect/preview", {"source": COLLECT_SRC})
+groups = {g["kind"]: g for g in (preview or {}).get("groups", [])}
+check("预扫描六类齐全", set(groups) == {"character", "lorebook", "preset", "theme", "script", "text"}
+      and len(groups["character"]["files"]) == 2,
+      str({k: len(v["files"]) for k, v in groups.items()}))
+check("嵌套相对路径保留", any(f["path"].startswith("深层") for f in groups["character"]["files"]),
+      str(groups["character"]["files"]))
+check("建议跳过归档", any(s["name"] == "归档.zip" for s in (preview or {}).get("skipped", [])),
+      str((preview or {}).get("skipped")))
+
+r = call("POST", "/api/collect", {"source": COLLECT_SRC, "root": TESTDATA})
+check("收纳执行 ok（7 个可收纳）", (r or {}).get("ok") is True and (r or {}).get("copied") == 7, str(r)[:100])
+check("分类落位：角色卡（含嵌套）", os.path.isfile(os.path.join(TESTDATA, "角色卡", "卡A.json"))
+      and os.path.isfile(os.path.join(TESTDATA, "角色卡", "卡B.json")))
+check("分类落位：其余类型", all(os.path.isfile(os.path.join(TESTDATA, d, f)) for d, f in (
+    ("世界书", "书A.json"), ("预设", "预设A.json"), ("美化", "美化A.json"),
+    ("脚本", "脚本A.js"), ("文本", "说明.txt"))))
+check("源目录默认不动", os.path.isfile(os.path.join(COLLECT_SRC, "卡A.json")))
+check("收录条目已入库", call("GET", "/api/items?kind=character&q=" + urllib.parse.quote("收纳卡A")) != [])
+
+r2 = call("POST", "/api/collect", {"source": COLLECT_SRC, "root": TESTDATA})
+check("重名自动加序号", (r2 or {}).get("ok") is True
+      and os.path.isfile(os.path.join(TESTDATA, "角色卡", "卡A (2).json")), str(r2)[:80])
+
+collect_write("移动我.txt", "move-me")
+r3 = call("POST", "/api/collect", {"source": COLLECT_SRC, "root": TESTDATA, "move": True,
+                                   "files": ["移动我.txt"]})
+check("move 模式源文件已删（回收站）", (r3 or {}).get("ok") is True
+      and not os.path.isfile(os.path.join(COLLECT_SRC, "移动我.txt"))
+      and os.path.isfile(os.path.join(TESTDATA, "文本", "移动我.txt")), str(r3)[:100])
+
+code = call_code("POST", "/api/collect", {"source": COLLECT_SRC, "root": TESTDATA, "files": ["不存在.txt"]})
+check("未知文件清单 400", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/collect", {"source": COLLECT_SRC, "root": "D:\\不存在的根\\nope"})
+check("未登记目标根 400", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/collect/preview", {"source": os.path.join(COLLECT_SRC, "不存在")})
+check("来源不存在 400", code == 400, f"HTTP {code}")
+TAVERN_COLLECT = os.path.abspath(os.path.join(".smoke", "收纳酒馆源"))
+os.makedirs(TAVERN_COLLECT, exist_ok=True)
+call("POST", "/api/roots", {"path": TAVERN_COLLECT, "source": "tavernST"})
+code = call_code("POST", "/api/collect", {"source": COLLECT_SRC, "root": TAVERN_COLLECT})
+check("酒馆源目标 400（只读托管）", code == 400, f"HTTP {code}")
+call("DELETE", "/api/roots", {"path": TAVERN_COLLECT})
+
+# 清理：收纳副本进回收站（按目录精确定位），来源目录整体移除
+for d in ("角色卡", "世界书", "预设", "美化", "脚本", "文本"):
+    for row in call("GET", "/api/items?dir=" + urllib.parse.quote(d)):
+        if row.get("fullPath", "").startswith(os.path.abspath(TESTDATA)):
+            call("POST", f"/api/items/{row['id']}/delete", {})
+shutil.rmtree(COLLECT_SRC, ignore_errors=True)
+call("POST", "/api/rescan")
+check("收纳段已清理", not any(i["fileName"].startswith(
+    ("卡A", "卡B", "书A", "预设A", "美化A", "脚本A", "说明", "移动我"))
+    for i in call("GET", "/api/items")))
 
 print("== 错误合同（v0.5.2 回归）==")
 code = call_code("GET", "/api/items/unknownid0000")

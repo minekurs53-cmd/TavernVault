@@ -342,14 +342,17 @@ async function toggleFavorite(item, btn) {
 export async function openDrawer(id) {
   state.selectedId = id;
   const cached = state.items.find((i) => i.id === id);
-  if (!cached) return;
   const overlay = $('#drawer-overlay');
   overlay.hidden = false;
-  // 重取最新条目：409（文件已被外部修改）后缓存里的 modifiedAt 已过期，重开抽屉必须拿到新鲜时间戳（v0.5.2 N5）
+  // 重取最新条目：409（文件已被外部修改）后缓存里的 modifiedAt 已过期，重开抽屉必须拿到新鲜时间戳（v0.5.2 N5）。
+  // 缓存未命中也照常取：跨库跳转（导出副本/修改历史，v0.7.1）时条目不在当前过滤视图里。
   let item = cached;
   try {
     item = await api.item(id);
-  } catch (e) { toast(e.message, 'err'); } // 取失败退回缓存条目渲染
+  } catch (e) {
+    toast(e.message, 'err');
+    if (!cached) { overlay.hidden = true; return; } // 缓存也没有且取失败：关回抽屉
+  }
   if (overlay.hidden) return; // 等待期间已被关闭（v0.5.2）
   renderDrawer(item);
   $('#drawer-overlay').querySelector('.drawer-close').focus();
@@ -370,6 +373,7 @@ function renderDrawer(item) {
     : `<span class="ico" style="color:${km.color}">${icon(km.icon)}</span>`;
 
   const canEdit = ['character', 'lorebook', 'preset', 'theme', 'script', 'text'].includes(item.kind);
+  const isTavern = !!item.rootSource; // 酒馆来源：就地编辑已退役（v0.7.1），仅可导出副本
   const stats = [
     { k: '类型', v: `${km.label}${item.hasEmbeddedCard ? ' · 内嵌卡' : ''}` },
     { k: '大小', v: fmtSize(item.sizeBytes) },
@@ -408,8 +412,9 @@ function renderDrawer(item) {
           ${stats.map((s) => `<div class="stat ${s.wide ? 'wide' : ''}"><span>${s.k}</span><b title="${escapeHtml(s.v)}">${escapeHtml(s.v)}</b></div>`).join('')}
         </div>
         <div class="drawer-actions">
-          ${canEdit ? `<button class="btn primary" data-act="edit"><span class="ico">${icon('edit')}</span>编辑</button>` : ''}
-          ${item.hasCharacterBook ? `<button class="btn" data-act="editbook" style="grid-column:span 2;justify-content:center"><span class="ico">${icon('lorebook')}</span>编辑内置世界书（${item.entryCount} 条）</button>` : ''}
+          ${canEdit && !isTavern ? `<button class="btn primary" data-act="edit"><span class="ico">${icon('edit')}</span>编辑</button>` : ''}
+          ${canEdit && !isTavern && item.hasCharacterBook ? `<button class="btn" data-act="editbook" style="grid-column:span 2;justify-content:center"><span class="ico">${icon('lorebook')}</span>编辑内置世界书（${item.entryCount} 条）</button>` : ''}
+          ${isTavern ? `<button class="btn primary" data-act="export" title="复制到局外存储后即可自由编辑；编辑完用酒馆自带的导入功能写回"><span class="ico">${icon('copy')}</span>导出副本到局外存储</button>` : ''}
           <button class="btn" data-act="reveal"><span class="ico">${icon('folder')}</span>打开所在文件夹</button>
           <button class="btn" data-act="rename"><span class="ico">${icon('edit')}</span>重命名</button>
           <button class="btn" data-act="move"><span class="ico">${icon('move')}</span>移动到…</button>
@@ -442,6 +447,14 @@ function renderDrawer(item) {
       if (act === 'editbook') openBookEditor(item);
       if (act === 'backups') showBackups(item);
       if (act === 'reveal') { await api.reveal(item.id); }
+      // 导出副本（酒馆来源专用，v0.7.1）：复制到第一个局外库根 → 直接打开副本详情
+      if (act === 'export') {
+        const r = await api.exportItem(item.id);
+        toast(`已导出：${r.fileName}（局外存储根目录，可直接编辑）`);
+        await refreshMeta();
+        await refreshItems();
+        openDrawer(r.id);
+      }
       if (act === 'copy') {
         await navigator.clipboard.writeText(item.fullPath);
         toast('路径已复制');
@@ -543,6 +556,162 @@ async function showBackups(item) {
     }
   };
   renderList(list);
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('[data-act=close]')) mask.remove();
+  });
+}
+
+// 修改历史（v0.7.1）：应用内改过的文件，按最近写入倒序——解决"改了文件但忘了文件名"的查找难题。
+// 数据源是备份清单（每次保存/还原/重命名/移动前都会先备份），酒馆侧的直接改动不经应用、不会出现。
+// 收纳入库（v0.7.3）：散乱文件夹 → 内容识别分类预览 → 批量复制进局外库根的类型子目录（源默认不动）。
+// 面向"文件夹摆得没那么井井有条"的场景；压缩包/其他不收纳（报告中建议跳过）。
+export async function showCollect() {
+  const normalRoots = (state.meta?.roots || []).filter((r) => r.source === 'normal');
+  const body = el(`
+    <div>
+      <h3>收纳入库</h3>
+      <p>选一个资源文件夹，按**文件内容**识别类型后批量复制进库的类型子目录（角色卡/世界书/预设/美化/脚本/文本）。默认复制、源目录不动；压缩包与其他类型不收纳。</p>
+      <div class="add-root-row">
+        <input type="text" id="collect-source" placeholder="来源文件夹路径（递归扫描）">
+        <button class="btn" id="collect-pick"><span class="ico">${icon('folder')}</span>浏览…</button>
+        <button class="btn primary" id="collect-scan">扫描预览</button>
+      </div>
+      <div id="collect-preview" style="margin-top:10px"></div>
+      <div class="add-root-row" id="collect-target" hidden style="margin-top:10px">
+        <label style="font-size:12px;color:var(--text-2);flex:none">目标库根</label>
+        <select id="collect-root" style="flex:1"></select>
+        <label class="toggle" style="flex:none"><input type="checkbox" id="collect-move"> 收纳后删除源文件（进回收站）</label>
+      </div>
+      <div class="m-actions">
+        <button class="btn" data-act="close">关闭</button>
+        <button class="btn primary" id="collect-run" disabled>开始收纳</button>
+      </div>
+    </div>`);
+  const mask = openModal(body);
+  hydrateIcons(body);
+
+  const sourceInput = body.querySelector('#collect-source');
+  const previewBox = body.querySelector('#collect-preview');
+  const targetRow = body.querySelector('#collect-target');
+  const rootSel = body.querySelector('#collect-root');
+  const runBtn = body.querySelector('#collect-run');
+
+  if (!normalRoots.length) {
+    previewBox.appendChild(el('<div class="empty" style="padding:10px">还没有局外存储库根——请先在库设置中添加一个普通库目录作为收纳目标</div>'));
+    body.querySelector('#collect-scan').disabled = true;
+  } else {
+    rootSel.innerHTML = normalRoots
+      .map((r) => `<option value="${escapeHtml(r.path)}">${escapeHtml(r.path)}</option>`)
+      .join('');
+  }
+
+  body.querySelector('#collect-pick').addEventListener('click', async () => {
+    try {
+      const r = await api.pickFolder();
+      if (r?.path) sourceInput.value = r.path;
+    } catch (e) { toast(e.message, 'err'); }
+  });
+  body.querySelector('#collect-scan').addEventListener('click', doScan);
+  sourceInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doScan(); });
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('[data-act=close]')) mask.remove();
+  });
+
+  async function doScan() {
+    const source = sourceInput.value.trim();
+    if (!source) return;
+    previewBox.innerHTML = '<div class="empty" style="padding:10px">扫描中…</div>';
+    let r;
+    try { r = await api.collectPreview(source); }
+    catch (e) { previewBox.innerHTML = ''; toast(e.message, 'err'); return; }
+    targetRow.hidden = false;
+    renderPreview(r);
+  }
+
+  function renderPreview({ groups, skipped }) {
+    previewBox.innerHTML = '';
+    if (!groups.length && !skipped.length) {
+      previewBox.appendChild(el('<div class="empty" style="padding:10px">没有找到任何文件</div>'));
+      return;
+    }
+    for (const g of groups) {
+      const group = el(`<div class="collect-group">
+        <div class="cg-head"><label class="toggle"><input type="checkbox" checked data-group>
+          ${escapeHtml(g.label)}（${g.files.length}）→ ${escapeHtml(g.subdir)}/</label></div>
+        <div class="cg-files"></div>
+      </div>`);
+      const files = group.querySelector('.cg-files');
+      for (const f of g.files) {
+        const row = el(`<label class="collect-file"><input type="checkbox" checked data-path="${escapeHtml(f.path)}">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(f.path)}">${escapeHtml(f.path)}</span>
+          <span style="margin-left:auto;flex:none">${fmtSize(f.size)}</span></label>`);
+        files.appendChild(row);
+      }
+      group.querySelector('[data-group]').addEventListener('change', (e) => {
+        group.querySelectorAll('[data-path]').forEach((cb) => { cb.checked = e.target.checked; });
+      });
+      previewBox.appendChild(group);
+    }
+    if (skipped.length) {
+      previewBox.appendChild(el(`<div class="empty" style="padding:6px;text-align:left">
+        建议跳过（压缩包/其他）：${escapeHtml(skipped.map((s) => s.name).join('、'))}</div>`));
+    }
+    runBtn.disabled = false;
+  }
+
+  runBtn.addEventListener('click', async () => {
+    const files = [...previewBox.querySelectorAll('[data-path]:checked')].map((cb) => cb.dataset.path);
+    if (!files.length) { toast('请至少勾选一个文件', 'err'); return; }
+    runBtn.disabled = true;
+    try {
+      const r = await api.collectExecute(sourceInput.value.trim(), rootSel.value, files,
+        body.querySelector('#collect-move').checked);
+      if (r.warnings?.length) toast(r.warnings.join('；'), 'err');
+      const failed = r.report.filter((x) => x.status === 'failed');
+      toast(`收纳完成：${r.copied}/${r.total}${failed.length ? `，失败 ${failed.length}` : ''}`);
+      previewBox.innerHTML = `<div class="empty" style="padding:8px;text-align:left">${
+        r.report.map((x) => `${x.status === 'failed' ? '❌' : '✅'} ${escapeHtml(x.file)} → ${escapeHtml(x.dest || x.error || '')}`)
+          .join('<br>')}</div>`;
+      await refreshMeta();
+      await refreshItems();
+    } catch (e) { toast(e.message, 'err'); }
+    runBtn.disabled = false;
+  });
+}
+
+export async function showHistory() {
+  let rows = [];
+  try {
+    rows = (await api.history()).rows || [];
+  } catch (e) { toast(e.message, 'err'); return; }
+  const body = el(`
+    <div>
+      <h3>修改历史</h3>
+      <p>你在应用内保存 / 还原 / 重命名 / 移动过的文件，按最近写入排序（最多 100 条）。点击条目打开详情。酒馆内的直接改动不经过应用，不会出现在这里。</p>
+      <div class="backup-list"></div>
+      <div class="m-actions">
+        <button class="btn" data-act="close">关闭</button>
+      </div>
+    </div>`);
+  const mask = openModal(body);
+  const box = body.querySelector('.backup-list');
+  if (!rows.length) {
+    box.appendChild(el('<div class="empty" style="padding:16px">还没有记录——在应用内编辑保存后会自动出现</div>'));
+  }
+  for (const r of rows) {
+    const row = el(`<div class="backup-item" style="cursor:pointer" title="打开详情">
+      <span class="b-time">${escapeHtml(new Date(r.lastModified).toLocaleString())}</span>
+      <span style="flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.fileName)}</span>
+      <span class="chip">${escapeHtml(r.kindLabel)}</span>
+      <span class="b-size">改过 ${r.edits} 次</span>
+    </div>`);
+    row.addEventListener('click', async () => {
+      mask.remove();
+      closeDrawer();
+      openDrawer(r.id);
+    });
+    box.appendChild(row);
+  }
   body.addEventListener('click', (e) => {
     if (e.target.closest('[data-act=close]')) mask.remove();
   });
@@ -703,9 +872,26 @@ export async function refreshMeta() {
   state.meta = await api.meta();
 }
 
+// 后台自动重扫的可视化（v0.7.2）：服务端 VaultWatcher 重扫后 lastScanAt 变化 → 拉新数据刷新界面。
+// 只读轮询、不动任何服务端状态；页面隐藏时跳过，弹窗/编辑器打开时也跳过（避免打断输入）。
+function startAutoRefresh() {
+  setInterval(async () => {
+    if (document.hidden || document.querySelector('.modal-mask')
+      || !document.getElementById('editor-overlay').hidden) return;
+    const fresh = await api.meta().catch(() => null);
+    if (!fresh || fresh.lastScanAt === state.meta?.lastScanAt) return;
+    state.meta = fresh;
+    renderSidebar();
+    refreshItems();
+  }, 5000);
+}
+
 export function initShell() {
   // 侧栏手风琴（单开互斥）
   initAccordion();
+
+  // 自动刷新轮询（v0.7.2：配合服务端文件监视）
+  startAutoRefresh();
 
   // 「新建」按钮 + 下拉菜单（v0.6.0）
   initCreateButton();

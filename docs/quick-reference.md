@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-05 · 对应 v0.7.0
+> 最后更新：2026-09-05 · 对应 v0.7.8
 
 ## 一分钟了解
 
@@ -45,6 +45,7 @@ node tests/preset-model.test.mjs           # 预设写回纯函数测试（无�
 | `main.js` | 入口：主题切换、启动加载、设置弹窗（库根管理/接入向导/备份设置）、版本号 |
 | `app.js` | 主界面：**三逻辑库选项卡**（局外存储/SillyTavern/TauriTavern，切库重置 kind/dir/root/tag、保留搜索/收藏/排序）、每库类型+子目录二级导航、网格/列表、详情抽屉、备份弹窗 |
 | `editor.js` | 编辑器：角色卡表单+原始JSON、世界书/内嵌书条目、预设可视化、原文编辑 |
+| `preset-model.js` | 预设 prompt_order 写回纯函数（pickGroup/reorder/add/remove，Node 测试 18 项） |
 | `api.js` | fetch 封装：`get/post/put/del` 独立导出 + `api` 对象 |
 | `util.js` | 通用工具（格式化、转义等） |
 
@@ -66,10 +67,10 @@ GET /api/categories                    # 按根+目录聚合
 
 ### 编辑（全部走 备份→写→重扫）
 ```
-GET/PUT /api/cards/{id}                # PUT: {fields,alternateGreetings,tags} 或 {card} 整卡
-GET/PUT /api/cards/{id}/book           # 内嵌世界书；条目带 raw 时保形合并
+GET/PUT /api/cards/{id}                # PUT: {fields,alternateGreetings,tags} 或 {card} 整卡；酒馆源 403
+GET/PUT /api/cards/{id}/book           # 内嵌世界书；条目带 raw 时保形合并；酒馆源 403
 GET/PUT /api/lore/{id}                 # 世界书
-GET/PUT /api/text/{id}                 # 文本；.json 保存前校验
+GET/PUT /api/text/{id}                 # 文本；.json 保存前校验；酒馆源 403
 ```
 
 ### 另存为（自动命名 `原名-副本 yyyy-MM-dd_HHmmss`）
@@ -96,7 +97,11 @@ POST /api/items/{id}/tags              # {tags:[...]}
 POST /api/items/{id}/rename            # {name,force?}  酒馆源需 force
 POST /api/items/{id}/move              # {root,dir,force?} 目标根必须已登记
 POST /api/items/{id}/delete            # 进回收站
-POST /api/reveal                       # {id} 资源管理器定位
+POST /api/items/{id}/export            # 酒馆源导出副本到第一个局外库根（v0.7.1，局外源 400）
+GET  /api/history                      # 修改历史：应用内改过的文件按最近写入倒序（v0.7.1，上限 100）
+POST /api/reveal                       # {id} 资源管理器定位；{dataDir:true} 打开数据目录（⚠️ 有桌面副作用，冒烟禁用）
+POST /api/collect/preview              # 收纳入库预扫 {source} → 分类分组/文件清单/建议跳过（v0.7.3）
+POST /api/collect                      # 收纳执行 {source,root,files?,move?}：目标须局外库根；默认复制源不动
 ```
 
 ### 库根 / 酒馆
@@ -158,6 +163,11 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 | 启动后库全空但资源还在 | settings.json 损坏被重置（坏文件已保留为 `settings.json.corrupt-*`，日志与 `/api/meta.settingsWarning` 有告警）：重新登记库目录后重扫即可找回收藏/标签（索引有 `index.bak` 留档） |
 | 库里出现 `xxx.png.tmp-xxxx` 之类残片 | 旧版残留（v0.5.1 起扫描已过滤 `.tmp` 前缀且写失败自动清理），手动删除即可 |
 | 酒馆源文件改名被拒 (403) | 预期护栏；确认风险后请求体加 `force:true` |
+| 酒馆文件没有编辑按钮 / PUT 返回 403 | v0.7.1 预期行为：酒馆不实时读外部修改、还会用内存旧数据回写覆盖，就地编辑已退役。点「导出副本到局外存储」→ 编辑副本 → 用酒馆自带导入写回 |
+| 在应用里改了文件，酒馆里看不到 | 同上——外部修改酒馆不会实时/可靠读取；且酒馆界面操作可能把旧数据写回覆盖你的修改（资源管家重进也看不到的原因）。可靠路径只有导出副本+酒馆自带导入 |
+| 改过的文件忘了是哪个 | 侧栏「修改历史」：应用内保存/还原/重命名/移动过的文件按最近写入倒序，点击直达详情（酒馆侧直接改动不在此列） |
+| 外部/酒馆侧改动没出现在列表 | v0.7.2 起自动重扫（防抖 0.8s + 前端 5s 轮询，实测 ≤8s 可见）；若仍无更新确认 `settings.json` 的 `AutoWatch` 未被改回 false，或点「重新扫描」兜底 |
+| 数据/备份/日志存在哪 | 库设置「存储位置」显示数据目录路径，可一键打开；备份默认在其 `backups\` 下，可自定义 |
 | 旧索引缺新字段 | 版本门控没触发？确认 `IndexVersion` 已 +1 |
 | 修改后收藏/标签丢失 | 检查重命名/移动路径是否调了 `GetUserData`→`SetUserData` 迁移 |
 | 整窗一起滚 | 已修复（v0.4.3）：`html/body overflow:hidden` + `#content flex:1 min-height:0 overflow-y:auto`。新布局元素若破坏滚动隔离，检查中间是否缺 `min-height:0`（flex 子项默认 min-height:auto 会撑破） |
@@ -169,6 +179,13 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 - **进位**：主版本 X = 重大重构/不兼容；次版本 Y = 新功能迭代（一次迭代一个小版本）；修订 Z = bug 修复累计（进位时热修段归 0）；热修 F = 发布后紧急修复（不加新功能，连修递增 fix-2…）
 - **显示链同步点**：`TavernVault.App.csproj` `<Version>` → `/api/meta`（读程序集 `ToString(4)`）→ 前端 `main.js updateVersion()` 转换显示。改版本只改 csproj 一处
 - **commit 首行**：`vX.Y.Z(-fixN)：主题`
+
+## 文档维护约定（v0.7.5 起，README 已按此结构化）
+
+- **README**：新功能 → 「功能总览」对应小节加一行（一行讲清用户得到什么；不写版本号括注、不写实现细节）；
+  「版本历程」表加一行主题（≤30 字）。README 不复述原理——细节归 development-handoff，速查归本文件。
+- **development-handoff.md**：每个版本在 §3 新增小节（原理/踩坑/测试）；§9.1 版本表；§9.2 状态；§11 路线图裁决。
+- **quick-reference.md**（本文件）：新端点进 API 速查；新坑进「数据格式坑」/「故障排查」。
 
 文档演进规则（防版本历史无限膨胀）：
 

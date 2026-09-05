@@ -45,6 +45,14 @@ body {
 }
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 input, select, textarea { font: inherit; color: var(--text); }
+/* 裸 textarea 兜底（v0.7.2）：UA 默认白底在暗色主题下吞掉浅色文字
+   （备用开场白、世界书条目内容框等；预设详情/新增框已单独修过）。
+   已自带底色的规则（.field textarea/.raw-area/.pd-edit 等）按优先级自然覆盖 */
+textarea {
+  background: var(--surface-2); border: 1px solid transparent;
+  border-radius: 7px; padding: 8px 10px;
+}
+textarea:focus { outline: none; border-color: var(--accent); }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-3); background-clip: content-box; }
@@ -527,7 +535,8 @@ select:hover { color: var(--text); }
 }
 .pd-name:focus { border-color: var(--accent); background: var(--surface); }
 .pd-name:disabled { opacity: .6; }
-.pd-edit { width: 100%; resize: vertical; min-height: 180px; outline: none; border: 1px solid transparent; }
+.pd-edit { width: 100%; resize: vertical; min-height: 180px; outline: none; border: 1px solid transparent;
+  background: var(--surface-2); color: var(--text); }
 .pd-edit:focus { border-color: var(--accent); }
 .pd-edit:disabled { opacity: .65; }
 .pd-inject { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; font-size: 12px; color: var(--text-2); }
@@ -565,6 +574,12 @@ select:hover { color: var(--text); }
 .po-addrow .af-name { flex: 1; min-width: 0; }
 .po-addrow .af-name:focus, .po-addrow .af-role:focus { border-color: var(--accent); }
 .po-addform .af-content { margin: 0; }
+/* 收纳入库弹窗（v0.7.3） */
+.collect-group { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+.collect-group .cg-head { font-weight: 600; font-size: 12.5px; margin-bottom: 4px; }
+.collect-file { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--text-2);
+  padding: 2px 0 2px 20px; min-width: 0; }
+#collect-preview { max-height: 260px; overflow-y: auto; }
 
 /* 备份列表 */
 .backup-list { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }

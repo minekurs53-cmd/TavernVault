@@ -9,6 +9,7 @@ using System.Text.Json.Nodes;
 using TavernVault.App.Services;
 using TavernVault.Core;
 using TavernVault.Core.Cards;
+using TavernVault.Core.Collect;
 using TavernVault.Core.Detection;
 using TavernVault.Core.FileOps;
 using TavernVault.Core.Models;
@@ -87,7 +88,10 @@ public static class ApiServer
                 ctx.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate",
         });
 
-        MapApi(app, vault, thumbs, headless);
+        var watcher = new VaultWatcher(vault);
+        watcher.Start(); // 库根文件监视（v0.7.2）：外部改动防抖自动重扫；App 退出时随容器释放
+        app.Lifetime.ApplicationStopping.Register(watcher.Dispose);
+        MapApi(app, vault, thumbs, headless, watcher);
         return new ApiServerHandle(app, token, vault.DataDir);
     }
 
@@ -96,10 +100,15 @@ public static class ApiServer
     /// 结果固定为绝对路径（启动时冻结，不随进程工作目录漂移）。
     /// App 启动期的单实例 Mutex 名也要用它，必须与 SettingsStore 的默认值保持同一来源。
     /// </summary>
-    public static string ResolveDataDir(string[] args) =>
-        Array.Find(args, a => a.StartsWith("--data=")) is { } d && d[7..].Trim().Length > 0
-            ? Path.GetFullPath(d[7..])
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TavernVault");
+    /// <summary>数据目录解析优先级：显式 --data= &gt; --portable（程序目录\data，拷贝即用） &gt; %APPDATA%。</summary>
+    public static string ResolveDataDir(string[] args)
+    {
+        if (Array.Find(args, a => a.StartsWith("--data=")) is { } d && d[7..].Trim().Length > 0)
+            return Path.GetFullPath(d[7..]);
+        if (args.Contains("--portable"))
+            return Path.Combine(AppContext.BaseDirectory, "data"); // v0.7.7 便携模式
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TavernVault");
+    }
 
     private static string ValidateToken(string token)
     {
@@ -126,7 +135,8 @@ public static class ApiServer
         // 不存在则保持空库，由前端空态引导用户在「库设置」中添加
     }
 
-    private static void MapApi(WebApplication app, Vault vault, ThumbnailService thumbs, bool headless)
+    private static void MapApi(WebApplication app, Vault vault, ThumbnailService thumbs, bool headless,
+        VaultWatcher watcher)
     {
         // ---------- 元信息 / 扫描 ----------
         app.MapGet("/api/meta", (HttpContext ctx) => Handle(ctx, () =>
@@ -160,6 +170,7 @@ public static class ApiServer
                 }).ToList(),
                 lastScanAt = vault.LastScanAt,
                 settingsWarning = CombinedWarning(vault.SettingsWarning, vault.Backups.LoadWarning),
+                dataDir = vault.DataDir,
                 version = typeof(ApiServer).Assembly.GetName().Version?.ToString(4),
             });
         }));
@@ -239,6 +250,7 @@ public static class ApiServer
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
+            if (TavernEditGuard(item) is { } g1) return g1;
 
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             if (body is null) return Err("请求体格式错误", 400);
@@ -385,6 +397,171 @@ public static class ApiServer
             return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath), fileName = Path.GetFileName(newPath) });
         }));
 
+        // ---------- 导出副本（v0.7.1，酒馆来源专用） ----------
+        // 把酒馆目录里的文件字节级复制到第一个局外库根（"原名-副本 时间戳"命名），副本可直接编辑。
+        // 这是编辑酒馆资源的可靠路径的第一步：导出 → 编辑副本 → 酒馆自带导入写回。
+        app.MapPost("/api/items/{id}/export", (HttpContext ctx, string id) => Handle(ctx, () =>
+        {
+            var item = vault.Find(id);
+            if (item is null) return Err("条目不存在", 404);
+            if (item.RootSource == LibrarySource.Normal)
+                return Err("该文件已在局外存储，可直接编辑，无需导出", 400);
+            var targetRoot = vault.Settings.LibraryRoots
+                .FirstOrDefault(r => r.Source == LibrarySource.Normal)?.Path;
+            if (targetRoot is null)
+                return Err("尚未登记局外存储库根：请先在「库设置」添加一个普通库目录作为导出目标", 400);
+            var newPath = FileOperations.GetSaveAsPath(Path.Combine(targetRoot, item.FileName));
+            File.Copy(item.FullPath, newPath);
+            vault.UpsertItem(newPath);
+            AppLog.Info($"导出副本：{item.FullPath} → {newPath}");
+            return Json(new { ok = true, id = LibraryScanner.ComputeId(newPath), fileName = Path.GetFileName(newPath) });
+        }));
+
+        // ---------- 修改历史（v0.7.1） ----------
+        // 程序内每次写入前都会自动备份 → 备份清单即"我在应用里改过哪些文件"的权威记录。
+        // 按原文件聚合取最近写入时间倒序（含条目当前 id，前端可直达详情）；酒馆侧的外部改动不经此记录。
+        app.MapGet("/api/history", (HttpContext ctx) => Handle(ctx, () =>
+        {
+            var rows = vault.Backups.All()
+                .Where(b => File.Exists(b.OriginalPath))
+                .GroupBy(b => b.OriginalPath, StringComparer.OrdinalIgnoreCase)
+                .Select(g =>
+                {
+                    var path = g.Key;
+                    var item = vault.Find(LibraryScanner.ComputeId(path));
+                    return new
+                    {
+                        id = LibraryScanner.ComputeId(path),
+                        fileName = Path.GetFileName(path),
+                        kind = ItemKindText.KeyOf(item?.Kind ?? ItemKind.Other),
+                        kindLabel = ItemKindText.LabelOf(item?.Kind ?? ItemKind.Other),
+                        rootSource = (int)(item?.RootSource ?? LibrarySource.Normal),
+                        lastModified = g.Max(b => b.SavedAt),
+                        edits = g.Count(),
+                    };
+                })
+                .OrderByDescending(r => r.lastModified)
+                .Take(100)
+                .ToList();
+            return Json(new { rows });
+        }));
+
+        // ---------- 收纳入库（v0.7.3） ----------
+        // 预扫描来源文件夹给出分类预览；确认后批量复制（默认，源不动）进局外库根的类型子目录。
+        // 酒馆库根禁止作为目标（只读托管）；archive/other 不收纳（报告中建议跳过）。
+        app.MapPost("/api/collect/preview", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
+        {
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            var source = body?["source"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(source)) return Err("来源目录为空", 400);
+            var full = Path.GetFullPath(source);
+            if (!Directory.Exists(full)) return Err("来源文件夹不存在", 400);
+
+            var candidates = CollectScanner.Scan(full);
+            var groups = candidates
+                .Where(c => CollectScanner.SubdirFor(c.Kind) is not null)
+                .GroupBy(c => c.Kind)
+                .Select(g => new
+                {
+                    kind = ItemKindText.KeyOf(g.Key),
+                    label = ItemKindText.LabelOf(g.Key),
+                    subdir = CollectScanner.SubdirFor(g.Key),
+                    files = g.Select(c => new
+                    {
+                        path = c.RelativePath,
+                        name = c.FileName,
+                        size = c.SizeBytes,
+                    }).ToList(),
+                })
+                .OrderBy(g => g.kind)
+                .ToList();
+            var skipped = candidates
+                .Where(c => CollectScanner.SubdirFor(c.Kind) is null)
+                .Select(c => new { path = c.RelativePath, name = c.FileName })
+                .ToList();
+            return Json(new { source = full, groups, skipped });
+        }));
+
+        app.MapPost("/api/collect", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
+        {
+            var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+            var source = body?["source"]?.GetValue<string>();
+            var rootPath = body?["root"]?.GetValue<string>();
+            var move = body?["move"]?.GetValue<bool>() ?? false;
+            if (string.IsNullOrWhiteSpace(source)) return Err("来源目录为空", 400);
+            var full = Path.GetFullPath(source);
+            if (!Directory.Exists(full)) return Err("来源文件夹不存在", 400);
+
+            var root = vault.Settings.LibraryRoots.FirstOrDefault(r =>
+                string.Equals(Path.GetFullPath(r.Path), Path.GetFullPath(rootPath ?? ""), StringComparison.OrdinalIgnoreCase));
+            if (root is null) return Err("目标库根未登记", 400);
+            if (root.Source != LibrarySource.Normal) return Err("酒馆库根为只读托管，不能作为收纳目标", 400);
+
+            var candidates = CollectScanner.Scan(full).ToDictionary(c => c.RelativePath, StringComparer.OrdinalIgnoreCase);
+            var requested = body?["files"] as JsonArray;
+            List<CollectCandidate> picked;
+            if (requested is not null)
+            {
+                picked = [];
+                foreach (var node in requested.OfType<JsonValue>())
+                {
+                    var rel = node.GetValue<string>();
+                    if (!candidates.TryGetValue(rel, out var c))
+                        return Err($"文件清单包含未知条目：{rel}", 400);
+                    picked.Add(c);
+                }
+            }
+            else
+            {
+                picked = [.. candidates.Values.Where(c => CollectScanner.SubdirFor(c.Kind) is not null)];
+            }
+
+            var report = new List<object>();
+            var warnings = new List<string>();
+            int copied = 0;
+            foreach (var c in picked)
+            {
+                var subdir = CollectScanner.SubdirFor(c.Kind);
+                if (subdir is null)
+                {
+                    report.Add(new { file = c.RelativePath, status = "skipped" });
+                    continue;
+                }
+                try
+                {
+                    var targetDir = Path.Combine(root.Path, subdir);
+                    Directory.CreateDirectory(targetDir);
+                    var dest = FileOperations.UniqueDestinationPath(targetDir, c.FileName);
+                    File.Copy(c.FullPath, dest);
+                    vault.UpsertItem(dest);
+                    copied++;
+                    if (move)
+                    {
+                        try
+                        {
+                            FileOperations.Recycle(c.FullPath);
+                            report.Add(new { file = c.RelativePath, status = "moved", dest = Path.GetFileName(dest) });
+                        }
+                        catch (Exception ex)
+                        {
+                            warnings.Add($"{c.FileName} 已复制但源文件删除失败：{ex.Message}");
+                            report.Add(new { file = c.RelativePath, status = "copied", dest = Path.GetFileName(dest) });
+                        }
+                    }
+                    else
+                    {
+                        report.Add(new { file = c.RelativePath, status = "copied", dest = Path.GetFileName(dest) });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    report.Add(new { file = c.RelativePath, status = "failed", error = ex.Message });
+                }
+            }
+            AppLog.Info($"收纳入库：{full} → {root.Path}，复制 {copied}/{picked.Count}（move={move}）");
+            return Json(new { ok = true, copied, total = picked.Count, warnings, report });
+        }));
+
         // ---------- 新建文件（v0.6.0） ----------
         // body: { kind, name, root? } —— 按空白模板创建文件并登记索引。
         // 护栏哲学：仅普通库根可新建，酒馆来源的文件由酒馆按路径/文件名引用，禁止从这里写入。
@@ -478,6 +655,7 @@ public static class ApiServer
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Character) return Err("不是角色卡", 400);
+            if (TavernEditGuard(item) is { } g2) return g2;
 
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             if (body?["entries"] is not JsonArray list) return Err("请求体格式错误", 400);
@@ -568,6 +746,7 @@ public static class ApiServer
         {
             var item = vault.Find(id);
             if (item is null || item.Kind != ItemKind.Lorebook) return Err("不是世界书", 400);
+            if (TavernEditGuard(item) is { } g3) return g3;
 
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
             if (body?["entries"] is not JsonArray list) return Err("请求体格式错误", 400);
@@ -630,6 +809,7 @@ public static class ApiServer
         {
             var item = vault.Find(id);
             if (item is null) return Results.NotFound();
+            if (TavernEditGuard(item) is { } g4) return g4;
             if (!TextExtensions.Contains(Path.GetExtension(item.FullPath))) return Err("该文件类型不支持文本编辑", 400);
 
             var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
@@ -787,6 +967,12 @@ public static class ApiServer
         app.MapPost("/api/reveal", async (HttpContext ctx, HttpRequest req) => await HandleAsync(ctx, async () =>
         {
             var body = await JsonNode.ParseAsync(req.Body);
+            // {dataDir:true}：打开数据目录（设置/索引/备份/日志所在，v0.7.1 起在库设置中展示）
+            if (body?["dataDir"] is JsonValue dv && dv.TryGetValue<bool>(out var wantDir) && wantDir)
+            {
+                FileOperations.RevealInExplorer(vault.DataDir);
+                return Json(new { ok = true });
+            }
             var item = vault.Find(body?["id"]?.GetValue<string>() ?? "");
             if (item is null) return Results.NotFound();
             FileOperations.RevealInExplorer(item.FullPath);
@@ -801,6 +987,7 @@ public static class ApiServer
             if (string.IsNullOrWhiteSpace(path)) return Err("路径为空", 400);
             var source = ParseSource(body?["source"]?.GetValue<string>());
             vault.AddRoot(new LibraryRoot { Path = path, Source = source });
+            watcher.RefreshRoots(); // 新库根纳入监视（v0.7.2）
             vault.Rescan();
             return Json(new { ok = true, roots = SerializeRoots(vault) });
         }));
@@ -809,6 +996,7 @@ public static class ApiServer
         {
             var path = (await JsonNode.ParseAsync(req.Body))?["path"]?.GetValue<string>();
             vault.RemoveRoot(path ?? "");
+            watcher.RefreshRoots();
             vault.Rescan();
             return Json(new { ok = true, roots = SerializeRoots(vault) });
         }));
@@ -943,6 +1131,19 @@ public static class ApiServer
 
     private static IResult Err(string message, int code) =>
         Results.Json(new { error = message }, statusCode: code);
+
+    // ---- 酒馆来源就地编辑守卫（v0.7.1） ----
+    // 实测确认：酒馆不会实时读取外部修改，角色卡等还被酒馆常驻内存缓存，
+    // 界面操作会用旧数据回写覆盖外部编辑（冷生效同样不可靠）。
+    // 酒馆资源的可靠编辑路径 = 「导出副本」到局外库根 → 编辑副本 → 酒馆自带导入写回。
+    private static readonly string TavernEditBlockedMsg =
+        "酒馆来源文件不支持就地编辑：酒馆不会实时读取外部修改，且界面操作可能用内存中的旧数据回写覆盖。"
+        + "请在详情页使用「导出副本」到局外存储后编辑，再通过酒馆自带的导入功能写回。";
+
+    /// <summary>酒馆来源（ST/TT）条目禁止就地编辑，返回 403；局外来源返回 null 放行。</summary>
+    private static IResult? TavernEditGuard(LibraryItem item) =>
+        item.RootSource == LibrarySource.Normal ? null : Err(TavernEditBlockedMsg, 403);
+
 
     // ---- 库根序列化 / 来源解析 ----
     private static List<object> SerializeRoots(Vault v) =>

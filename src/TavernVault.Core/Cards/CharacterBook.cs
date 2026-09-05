@@ -92,6 +92,7 @@ public static class CharacterBook
         ["entries"] = new JsonArray(),
     };
 
+
     // ---- 内部 ----
 
     private static BookEntry FromNode(string mapKey, JsonObject node)

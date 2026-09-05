@@ -1,7 +1,7 @@
 // 编辑器：角色卡（表单 / 原始JSON）、世界书（条目）、预设/美化/脚本/文本（原始JSON）
 
 import { api } from './api.js';
-import { el, $, icon, hydrateIcons, toast, escapeHtml, confirmDialog } from './util.js';
+import { el, $, icon, hydrateIcons, toast, escapeHtml, confirmDialog, openModal } from './util.js';
 import { refreshItems, refreshMeta, kindMeta } from './app.js';
 import { addPrompt, getGroups, isSystemPrompt, pickGroup, removePrompt, reorderGroup } from './preset-model.js';
 
@@ -72,6 +72,11 @@ function mountEditor(item, title, tabsHtml = '') {
 }
 
 export async function openEditor(item) {
+  if (item.rootSource) {
+    // 酒馆来源就地编辑已退役（v0.7.1）：外部修改不会被酒馆实时读取，还可能被酒馆回写覆盖
+    toast('酒馆来源文件不支持就地编辑，请在详情页使用「导出副本」', 'err');
+    return;
+  }
   const editable = ['character', 'lorebook', 'preset', 'theme', 'script', 'text'];
   if (!editable.includes(item.kind)) {
     toast('该类型暂不支持在程序内编辑', 'err');
@@ -405,6 +410,7 @@ async function buildLoreEditor(item, opts = {}) {
         <div class="lore-list-head">
           <div class="row1">
             <span class="count"><b class="lore-count">${entries.length}</b> 个条目</span>
+            ${embedded ? `<button class="btn sm" data-import title="把库里独立世界书的条目追加进来"><span class="ico">${icon('lorebook')}</span>导入</button>` : ''}
             <button class="btn sm" data-add><span class="ico">${icon('plus')}</span>新增</button>
           </div>
           <input class="lore-search" type="text" placeholder="搜索条目…">
@@ -522,6 +528,66 @@ async function buildLoreEditor(item, opts = {}) {
     renderList();
     renderForm();
   });
+
+  // 内嵌世界书合入（v0.7.6）：从库里的独立世界书追加条目（仅内嵌模式显示）
+  const importBtn = body.querySelector('[data-import]');
+  if (importBtn) importBtn.addEventListener('click', () => showBookImport());
+
+  // 内嵌世界书合入（v0.7.7）：选库里的独立世界书，条目规范化后追加进**当前编辑会话**（不写盘）。
+  // 闭包内持有 entries/renderList/renderForm/markDirty——与新增/删除同模型，保存才落盘。
+  async function showBookImport() {
+    let books;
+    try {
+      books = await api.items({ kind: 'lorebook' });
+    } catch (e) { toast(e.message, 'err'); return; }
+    if (!books.length) { toast('库里还没有独立世界书，可先「新建文件」或收纳入库', 'err'); return; }
+
+    const body = el(`
+      <div>
+        <h3>从独立世界书导入</h3>
+        <p>选择来源，其条目将规范化后**追加到当前编辑**（暂不写盘）；检查合并结果后点「保存」写入，保存前自动备份。</p>
+        <div class="backup-list"></div>
+        <div class="m-actions"><button class="btn" data-act="close">取消</button></div>
+      </div>`);
+    const mask = openModal(body);
+    const box = body.querySelector('.backup-list');
+    for (const b of books) {
+      const row = el(`<div class="backup-item" style="cursor:pointer" title="点击追加到编辑">
+        <span style="flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(b.title || b.fileName)}</span>
+        ${b.rootSource ? '<span class="chip">酒馆</span>' : ''}
+        <span class="b-size">${b.entryCount ?? 0} 条</span>
+      </div>`);
+      row.addEventListener('click', async () => {
+        try {
+          const src = await api.lore(b.id); // 服务端已把 Spec/数组容器规范化为 ST 条目
+          let next = 0; // 对象容器键顺延：现有最大数字键 +1；数组容器即追加到尾部
+          entries.forEach((e) => {
+            const n = parseInt(e.key, 10);
+            if (Number.isFinite(n) && n >= next) next = n + 1;
+          });
+          const incoming = src.entries || [];
+          for (const e of incoming) {
+            entries.push({ key: String(next++), data: e.data || {}, raw: undefined });
+          }
+          mask.remove();
+          if (incoming.length) {
+            selected = entries.length - incoming.length;
+            markDirty();
+            renderList();
+            renderForm();
+            toast(`已追加 ${incoming.length} 个条目——检查后点「保存」写入`);
+          } else {
+            toast('来源世界书没有条目');
+          }
+        } catch (e) { toast(e.message, 'err'); }
+      });
+      box.appendChild(row);
+    }
+    body.addEventListener('click', (e) => {
+      if (e.target.closest('[data-act=close]')) mask.remove();
+    });
+  }
+
   searchInput.addEventListener('input', renderList);
   // 只绑表单区：搜索框输入不属于编辑内容，不应标脏（v0.5.2）
   bindDirty(body.querySelector('.lore-form'));

@@ -1,160 +1,128 @@
-# 酒馆资源管家 (TavernVault)
+# <img src="src/TavernVault.App/wwwroot/favicon.svg" width="30" alt="TavernVault 图标"> 酒馆资源管家 (TavernVault)
 
-一个用于集中管理 SillyTavern（酒馆）资源的 Windows 桌面应用：角色卡、世界书、预设、美化主题、脚本等，不再散落在文件夹里翻找。
+集中管理 SillyTavern（酒馆）资源的 Windows 桌面应用：角色卡、世界书、预设、美化主题、脚本——不再散落在文件夹里翻找。
 
-> **关于本项目**：这是一个**个人学习项目**，用于学习桌面应用的初步项目搭建与管理（架构设计、版本迭代、测试体系、安全加固、打包分发等工程实践），随个人时间推进开发，功能以自用需求为准。仓库未来计划开放，欢迎交流与借鉴，暂不接受功能需求。
+![.NET](https://img.shields.io/badge/.NET-10-blue) ![平台](https://img.shields.io/badge/平台-Windows%2010%2F11-lightgrey) ![协议](https://img.shields.io/badge/协议-MIT-green) [![CI](https://github.com/minekurs53-cmd/TavernVault/actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 
-![技术栈](https://img.shields.io/badge/.NET-10-blue) ![平台](https://img.shields.io/badge/平台-Windows%2010%2F11-lightgrey) ![协议](https://img.shields.io/badge/协议-MIT-green)
+> **关于本项目**：这是一个**个人学习项目**，用于练习桌面应用的搭建与管理（架构、迭代、测试、安全、打包分发）。功能随自用需求推进，暂不接受功能需求；仓库计划开放，欢迎交流与借鉴。
 
-## 功能
+## 它解决什么问题
 
-- **自动识别分类**：递归扫描库目录，按**文件内容**（而非文件夹名）识别类型——角色卡（PNG 内嵌 chara/ccv3 或 V1/V2/V3 JSON）、世界书（entries 结构）、预设（prompts + 采样器）、美化主题、酒馆助手脚本/正则、文本、压缩包、其他
-- **三库独立管理**（v0.4.2）：侧栏顶部三个逻辑库选项卡——局外存储 / SillyTavern / TauriTavern（按库根来源自动归并），每个库有自己独立的类型分类与子目录导航，互不混显；接入酒馆后每个酒馆的功能分区（角色/世界书/预设/美化/正则）即其子目录
-- **手风琴导航与滚动隔离**（v0.4.3）：侧栏分类/子目录/我的标签三分区可折叠（单开互斥、平滑过渡、空分区置灰）；整窗不再一起滚，滚动只发生在侧栏与内容区内部，窗口缩放自适应
-- **酒馆接入**（v0.4.0）：一键检测本机 SillyTavern / TauriTavern 并把其数据子目录注册为带标记的库根，实现"局外编辑、酒馆内生效"；酒馆源文件默认禁止重命名/移动（聊天按文件名引用），写前强制备份
-- **浏览与查找**：网格/列表双视图、关键词搜索（名称/描述/创作者/标签）、排序、分类筛选、收藏
-- **程序内编辑**
-  - 角色卡：表单编辑全部常用字段（名称/描述/性格/场景/开场白/备用开场白/示例对话/标签/创作者…），保存写回 **PNG 内嵌数据块**（chara + ccv3 一次写入同步更新，图像数据与其它块字节级保留）或 JSON 文件（自动同步 ST 导出格式的根级镜像字段）；也可直接编辑原始 JSON
-  - **角色卡内嵌世界书**（data.character_book）：详情页显示"内置世界书 · N 条"徽章，可像独立世界书一样逐条编辑。兼容两种条目格式——Spec V2 标准（keys/enabled/insertion_order）与 ST 内部格式（key/disable/order），读取时统一转换、保存时逐条保形合并，id/selective/use_regex/extensions 等未编辑字段原样保留
-  - 世界书：条目列表 + 逐条编辑（关键词/内容/常驻蓝灯/插入位置/深度/概率…），可增删条目
-  - 预设：**可视化视图**——采样参数中文总览、按 prompt_order 解析的生效顺序（**拖拽排序** / 勾选启停 / 角色分组切换）、未排序提示词清单、点击查看提示词全文与统计；支持**新增/删除提示词**（系统管理项防误删）；原文视图仍可直接编辑保存
-  - 美化 / 脚本 / 文本：带 JSON 校验与格式化的原文编辑器
-- **文件操作**：重命名、移动（跨库根/自动建目录）、删除（进系统回收站）、打开所在文件夹、复制路径
-- **另存为**：编辑器内一键把当前内容（含未保存修改）另存为新文件，自动命名 `原名-副本 yyyy-MM-dd_HHmmss`，重名自动加序号；内嵌世界书可一键导出为独立世界书
-- **备份与还原**：所有覆盖写入（编辑保存/还原/重命名）前自动备份原文件，默认存 `%APPDATA%\TavernVault\backups`，**可自定义到任意位置**（v0.4.1，现有备份自动迁移过去）；详情页可查看备份列表、一键还原（还原前同样先备份当前）、删除；每文件保留份数与开关在库设置中调整
-- **我的标签**：给任意资源打自定义标签（如"常用""待整理"），随索引持久化
-- **安全边界**：所有文件操作限制在已登记的库目录内；本地服务只绑定 127.0.0.1
+- **散乱 → 有序**：把卡/书/预设扔进一个文件夹，按**文件内容**（而非文件夹名）自动识别分类；已有散乱目录可用「收纳入库」一键整理建库
+- **酒馆资源看得见、管得住**：本机 SillyTavern / TauriTavern 的资源目录接入为**只读托管**——实测直接改文件会被酒馆的内存缓存回写覆盖，因此编辑酒馆资源的可靠路径是「导出副本 → 编辑 → 酒馆自带导入写回」
+- **改过不迷路**：应用内改过的每个文件都有「修改历史」可查；每次覆盖写入前自动备份，坏了能还原
+- **外部改动自动可见**：库目录文件监视自动重扫，酒馆侧的增删改数秒内反映到界面，免手动扫描
 
-## 运行
+## 功能总览
 
-前置条件：Windows 10/11（自带 WebView2 运行时）+ [.NET 10 SDK](https://dotnet.microsoft.com/)（仅构建需要）。
+<!-- ═══ 维护约定（新增功能时看这里）═══
+     ① 在下方对应小节加一行（一行说清"用户得到了什么"，不加实现细节与版本号括注）
+     ② 【版本历程】表加一行主题
+     ③ 实现原理与踩坑写 docs/development-handoff.md §3 新小节；速查信息写 docs/quick-reference.md -->
+
+### 资源与库
+
+- **内容识别分类**：递归扫描按内容识别 8 类——角色卡（PNG 内嵌 chara/ccv3 或 V1/V2/V3 JSON）、世界书、预设、美化、脚本、文本、压缩包、其他
+- **三逻辑库**：局外存储 / SillyTavern / TauriTavern 独立浏览，各库独立的类型分类与子目录导航
+- **收纳入库**：散乱文件夹按内容识别后批量复制进库的类型子目录（源目录不动、可选移动、重名自动序号）
+- **酒馆接入**：一键探测本机酒馆，把 characters / worlds / OpenAI Settings / themes / regex 注册为只读托管库根
+- **新建文件**：6 类官方格式空白模板，创建即进入编辑器；重名自动序号
+
+### 编辑器
+
+- **角色卡**：表单编辑常用字段，保存写回 PNG 内嵌数据块（chara + ccv3 一次同步、图像字节级保留）或 JSON（同步根级镜像字段）；备用开场白与标签
+- **角色卡内嵌世界书**：`data.character_book` 逐条编辑，Spec V2 与 ST 内部格式读取统一转换、写入保形合并
+- **世界书**：条目增删改；entries 数组/对象容器保形（NovelAI / Spec V2 导出读写不损坏）；**内嵌书合入**——独立世界书一键追加进卡片内嵌书（与导出互为反向）
+- **预设可视化**：采样参数中文总览、生效顺序拖拽排序、新增/删除提示词（系统项防误删）、角色分组切换、提示词全文与统计
+- **通用原文编辑**：美化 / 脚本 / 文本带 JSON 校验与格式化；全部编辑器支持另存为（自动命名、重名序号）
+
+### 自动化与整理
+
+- **文件监视自动重扫**：库目录的新增/修改/删除（含酒馆侧改动）防抖自动入索引，界面数秒自动刷新
+- **修改历史**：应用内保存 / 还原 / 重命名 / 移动过的文件按最近写入倒序，点击直达详情
+- **文件操作**：重命名、跨库根移动（自动建目录）、删除进系统回收站、资源管理器定位
+- **备份与还原**：覆盖写入前自动备份；备份位置可自定义（现有备份自动迁移）；酒馆源强制备份、保留份数更高
+
+### 安全与可靠
+
+- **酒馆只读托管**：酒馆来源禁止就地编辑与重命名/移动（明确确认可 force）；写前强制备份
+- **本地服务隔离**：Kestrel 只监听 127.0.0.1；API 需随机会话令牌；Host 头白名单防 DNS rebinding
+- **数据透明**：库设置显示数据目录真实路径并可一键打开；设置损坏留档、索引留 .bak
+- **我的标签 / 收藏**：随索引持久化，重命名/移动自动迁移
+
+## 快速开始
+
+**方式一（推荐，免装环境）**：从 Releases 下载 `TavernVault-win-x64`（自包含单文件，Win10/11 自带 WebView2 即可运行；也可自行执行下方的 publish 命令生成）。
+
+**方式二（源码构建）**：
 
 ```bash
-dotnet build -c Release
-# 方式一：窗口模式（默认）
+dotnet build TavernVault.slnx -c Release
 ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe
-# 方式二：无窗口服务模式（调试/远程）
-./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe --server --port=47999
 ```
 
-首次启动会探测 `%USERPROFILE%\酒馆PR`（存在才注册，不含机器特定路径；也可用环境变量指定酒馆数据目录）并自动扫描，均可在"库设置"中增删。
+> 打包命令与产物说明见 `docs/quick-reference.md`；无窗口服务模式（调试/脚本）：加 `--server --port=<端口>`；便携模式（数据随程序目录，拷贝即用）：加 `--portable`。
 
-## 打包（v0.6.1 起）
+**首次配置三件事（都在界面里）**：
+
+1. 「库设置」登记资源文件夹；或用「收纳入库」从散乱文件夹一键整理建库
+2. 要管理酒馆资源就点「接入酒馆」自动探测注册
+3. 要改酒馆里的资源：详情页「导出副本」→ 编辑副本 → 酒馆自带导入写回
+
+## 工作原理
+
+核心链路：`TypeDetector 内容识别 → LibraryScanner 增量索引（未变化条目毫秒级复用）→ JsonNode 无损编辑（未知字段永不丢失）→ 写前备份 → 索引增量更新`。
+
+技术栈：.NET 10 + ASP.NET Core (Kestrel 本地 REST API) + WPF/WebView2 外壳 + 原生 HTML/CSS/JS 前端（无 npm、无构建链，改完即生效）。架构与流程图集见 [`docs/architecture-visualization.md`](docs/architecture-visualization.md)，完整原理与数据格式见 [`docs/development-handoff.md`](docs/development-handoff.md)。
+
+## 测试与质量
 
 ```bash
-# 自包含单文件：目标机器无需安装 .NET（WebView2 运行时 Win10/11 自带）
-dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true `
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-  -p:DebugType=none -p:AllowedReferenceRelatedFileExtensions=none `
-  -o dist/TavernVault-win-x64
+dotnet test TavernVault.slnx -c Release   # 单元 93 + 集成 16（真实 Kestrel + 隔离临时库，永不触碰真实库）
+node tests/preset-model.test.mjs          # 预设写回纯函数 18（无框架，退出码即结果）
+python tests/smoke_api.py                 # API 冒烟 207（先以 --server 模式起服务，见文件头说明）
 ```
 
-产物 = `TavernVault.exe`（约 153 MB，含 .NET 运行时）+ `wwwroot\` 前端目录，整体拷贝即可分发；数据仍写 `%APPDATA%\TavernVault`，删除目录即卸载。
+GitHub Actions 每次 push / PR 自动执行构建与全部测试（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）。
 
-## 项目结构
+## 安全模型要点
 
-```
-TavernVault/
-├─ src/TavernVault.Core/        # 核心类库（无 UI 依赖，可单测）
-│  ├─ Cards/       # PNG 数据块读写(PngChunkIO) + 角色卡读写(CharacterCardFile) + 内嵌世界书(CharacterBook)
-│  ├─ Detection/   # 基于内容的类型识别(TypeDetector) + 酒馆安装检测(TavernDetector)
-│  ├─ Scanning/    # 库扫描与索引构建（增量复用）
-│  ├─ Storage/     # 设置/索引持久化(SettingsStore) + 查询(Vault) + 备份存储(BackupStore)
-│  ├─ FileOps/     # 重命名/移动/回收站/路径防护
-│  └─ Models/      # AppSettings / LibraryItem / LibraryRoot / ItemKind
-├─ src/TavernVault.App/         # WPF(WebView2 外壳) + Kestrel API + wwwroot 前端
-│  ├─ Hosting/     # ApiServer.cs —— 全部 REST 端点
-│  ├─ Services/    # 缩略图缓存、文件夹选择器
-│  └─ wwwroot/     # 原生 HTML/CSS/JS 前端（无构建步骤）
-│     └─ js/       # api.js / app.js(主界面) / editor.js(编辑器) / main.js(入口) / util.js
-└─ tests/
-   ├─ TavernVault.Core.Tests/   # xUnit 单元测试（数量以 dotnet test 输出为准）
-   └─ smoke_api.py              # API 冒烟测试（连接信息自动读数据目录 server-connection.json）
-```
-
-## 技术选型
-
-- **.NET 10 + ASP.NET Core (Kestrel)**：本地 REST API 与静态托管，只监听 127.0.0.1，性能好、零重型依赖
-- **WPF + WebView2**：桌面外壳，Win11 系统自带运行时
-- **原生 HTML/CSS/JS 前端**：无 npm、无构建链，改完即生效
-- **System.Text.Json (JsonNode)**：编辑时保留文件中的未知字段，不破坏 ST 兼容性
-
-## 数据位置
-
-- 设置与索引：`<数据目录>\settings.json`、`index.json`（另存 `index.bak` 上一版留档；设置损坏时坏文件改名 `settings.json.corrupt-*` 保留）
-- 数据目录默认 `%APPDATA%\TavernVault\`，可用 `--data=` 覆盖
-- 备份：默认 `<数据目录>\backups\`，可在库设置中改为任意位置（现有备份自动迁移）
-- 缩略图缓存：`<数据目录>\thumbs\`（可整体删除，自动重建）
-- 日志：`<数据目录>\logs\`（按日切分保留 7 天）
-- 你的资源文件本体永远不会被程序移动或修改，除非主动执行编辑/文件操作；删除一律进回收站
-
-## 版本历程与路线图
-
-| 版本 | 主题 |
-|---|---|
-| v0.1.0 | 初版：扫描/分类/搜索/编辑/文件操作 |
-| v0.2.0 | 内嵌世界书、增量扫描、索引版本门控、用户数据迁移 |
-| v0.3.0 | 另存为、备份与还原、预设可视化一期 |
-| v0.3.1 | 库设置修复、Esc 兜底、预设可视化二期 |
-| v0.4.0 | 酒馆接入：库根来源标记、检测/接入向导、安全护栏 |
-| v0.4.1 | 侧栏库分组选项卡、备份位置自定义、项目文档体系 |
-| v0.4.2 | 三逻辑库选项卡（每库独立分类+二级子目录）、来源过滤与冷升级自愈 |
-| v0.4.3 | 侧栏手风琴（单开互斥）、滚动隔离布局、酒馆探测去硬编码（环境变量+约定路径，全仓库零机器特定路径）；fix-1 修复弹窗超高无法滚动，确立版本号规范 |
-| v0.5.0 | 深度优化：PNG 另存为数据损坏修复、本地 API 会话令牌+Host 校验、备份失败显性告警+滚动日志、写路径增量更新+原子写入、编辑并发防护 409、单实例防护 |
-| v0.5.1 | 安全与可靠性加固（依据 `docs/full-audit-v0.5.0.md`）：预设可视化 XSS 修复（第三方文件内容不再可注入脚本）、扫描跳过 junction（库外文件不再可能被索引改删）、内嵌书导出文件名清洗（杜绝路径逃逸）、settings.json 损坏防护+index.bak 留档、还原满上限自逐出修复（原子写回）、缩略图随数据目录、单实例 Mutex 按数据目录隔离、冒烟可重复（同目录连跑全绿） |
-| v0.5.2 | 可靠性收尾与编辑器重构：备份 Load 不丢记录 + RelocateTo 两阶段迁移（中断不再错位）、move 前自动备份、角色卡编辑器重构（保存双视图互刷 / Esc 修复 / 409 自动重扫恢复）、API 异常收编 + 请求体上限、WebView2 数据目录搬家 + 外部导航拦截、酒馆护栏与错误合同测试补齐 |
-| v0.5.3 | v0.5.x 收尾：浏览器 UI 清单 12 项实跑全过（外部浏览器 ?token= 通道）、奥卡姆剃刀修剪无用代码（旧重载 / 无引用导出 / 被取代的文档） |
-| v0.6.0 | 格式对齐 + 新建文件：识别扩至 13 类官方格式（textgen/instruct/context/sysprompt/quickreplies + 主题字段修正）、独立世界书容器保形（Spec V2/NovelAI 数组格式不再损坏）、11 类一键新建模板（创建即编辑）、酒馆接入目录扩至 11 项；单测 100、冒烟 191 |
-| v0.6.1 | 分类回撤 + 首次打包：移除侧栏 5 类官方模板分类（文本补全预设/指令模板/上下文模板/系统提示模板/快捷回复——缺乏编辑价值且个别规则会误收预设文件），相关文件回落"文本/脚本"（原文编辑器仍可用）、新建模板收敛为 6 类、酒馆接入目录回撤至 5 个功能分区；索引版本 3→4 自动重建（收藏/标签按快照回填）；win-x64 打包；单测 90、冒烟 168 |
-| v0.7.0 | 预设可视化三期 + 开源定位：生效顺序**拖拽排序**（写回 prompt_order）、**新增/删除提示词**（系统项防误删）、**角色分组切换**（写回逻辑抽 preset-model.js 纯函数 + Node 测试）；修复生效顺序行误写 `enable` 的既有置灰 bug；列表视图类型徽标纵向成列；声明学习项目 + MIT 协议；浏览器 UI 端到端实跑 |
-
-后续方向（按优先级）：
-1. 内嵌世界书合入（从独立世界书导入到卡片；导出已支持）
-2. 酒馆接入增强：聊天 → 角色卡反向引用检查（改名前提示断链）、接入子目录白名单可配置
-3. **可移植性**（v0.4.3 起步）：首次启动向导、探测规则配置化、可选便携模式——让项目在任何电脑开箱即用
-4. 重复资源检测（按内容指纹）
-5. FileSystemWatcher 监视目录变化自动重扫；批量操作（多选移动/打标）
-6. API 集成测试进 `dotnet test`（TestServer 收编冒烟）+ CI
-
-已完成（历史路线存档）：
-- ~~预设可视化三期~~ ✅ v0.7.0 完成（拖拽排序 / 新增·删除提示词 / 角色分组切换；一二期为采样参数、启停、详情编辑）
-- ~~格式识别对齐酒馆官方~~ ✅ v0.6.0 落地——主题字段修正与独立世界书容器保形保留至今；其中 5 类官方模板分类（textgen/instruct/context/sysprompt/quickreplies）因缺乏编辑价值且误收预设文件，v0.6.1 回撤
-- ~~新建文件~~ ✅ v0.6.0 完成（11 类模板 + 创建即编辑；v0.6.1 收敛为 6 类）
-
-已知边界：
-- PNG 卡片仅支持 tEXt 形式的内嵌数据（ST 标准形式；zTXt/iTXt 极少见，暂不写）
-- 识别覆盖 SillyTavern 官方主流资源 5 大类（角色卡/世界书/预设/美化/脚本）；官方模板类 JSON（textgen/instruct/context/sysprompt/quickreplies）与非标准文件统一落"文本/脚本"分类，原文编辑器仍可编辑，不会出错
-- 适合后续扩展的点：`ApiServer.MapApi`（加端点）、`editor.js`（加编辑器）、`TypeDetector`（加类型识别）、Core 层可直接复用做 CLI 或托盘工具
-
-## 测试
-
-```bash
-dotnet test TavernVault.slnx -c Release    # 单元测试（数量以输出为准）
-node tests/preset-model.test.mjs           # 预设写回逻辑测试（无框架，退出码即结果）
-# 冒烟测试：先启动 --server（连接信息写入数据目录 server-connection.json），再运行脚本
-./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe --server --port=47999 --data=testdata-server &
-python tests/smoke_api.py                  # 写操作只作用于 testdata/ 临时目录；同一数据目录可重复运行（自动清理上轮残留）
-```
-
-## 安全模型（v0.5.0，v0.5.1 补强）
-
-本地单用户应用的信任边界与防护：
-
-- **监听**：Kestrel 只绑 `127.0.0.1`，局域网不可达
-- **Host 校验**：`Host` 头只接受 `127.0.0.1`/`localhost`/`::1`，防 DNS rebinding（403）
-- **会话令牌**：每次启动随机生成令牌，`/api/*` 必须携带（`X-TV-Token` 头，img 标签用 `?token=` query），防本机浏览器恶意网页 drive-by 增删改文件（401）；令牌比对用恒定时间算法
-- **令牌分发**：窗口模式经 WebView2 在任何页面脚本执行前注入 `window.__TV_TOKEN__`；`--server` 模式写入数据目录 `server-connection.json`（url + token）供脚本读取
-- **内容即攻击面**（v0.5.1）：下载的卡/预设是不可信内容——预设可视化编辑器全部插值经 HTML 转义；卡片 `name` 等内容字段经清洗后才允许参与文件名派生（导出/另存为不可能写出库根）；扫描跳过 junction/符号链接，库外文件不可能借链接进入"可改删"范围
-- **接受的风险**：同用户权限的本机其它进程可读连接文件——与"能直接删文件"同级，不在威胁模型内；外部浏览器直接打开 URL 因无令牌不可用（预期）
-- **写护栏**：酒馆来源重命名/移动默认 403（`force` 放行）；删除走回收站；移动目标限已登记库根；写前备份，备份失败显性告警不静默
+- 一切文件操作限制在已登记库根内；删除走回收站；覆盖写入前备份、失败显性告警不静默
+- 下载的卡/预设视为**不可信内容**：界面插值全量 HTML 转义、文件名派生经清洗（无法写出库根）、扫描跳过 junction/符号链接
+- 会话令牌恒定时间比对；单实例 Mutex 按数据目录隔离；请求体上限防自锁
+- 完整威胁模型与审计报告：[`docs/full-audit-v0.5.0.md`](docs/full-audit-v0.5.0.md) 与开发文档安全章节
 
 ## 文档
 
-- `docs/development-handoff.md` —— **项目技术文档**：架构、核心原理、API 参考、数据格式、开发历程与未来方向
-- `docs/architecture-visualization.md` —— 架构与流程图集（Mermaid）
-- `docs/quick-reference.md` —— 开发速查：命令 / API / 数据格式坑 / 故障排查
-- `docs/st-sync-feasibility.md` —— 酒馆接入可行性分析（历史决策依据）
-- `docs/full-audit-v0.5.0.md` —— **全面安全与质量审查报告**（含全部已知问题的权威清单与修复路线图）
+| 文档 | 内容 |
+|---|---|
+| [`docs/development-handoff.md`](docs/development-handoff.md) | **权威技术文档**：架构、核心原理、API 参考、数据格式、开发历程、路线图全清单 |
+| [`docs/architecture-visualization.md`](docs/architecture-visualization.md) | 架构与流程图集（Mermaid） |
+| [`docs/quick-reference.md`](docs/quick-reference.md) | 开发速查：命令 / API / 数据格式坑 / 故障排查 / **文档维护约定** |
+| [`docs/full-audit-v0.5.0.md`](docs/full-audit-v0.5.0.md) | 全面安全与质量审查报告 |
+| [`docs/st-sync-feasibility.md`](docs/st-sync-feasibility.md) | 酒馆接入可行性分析（含实测修订：为何只读托管） |
+| 项目结构 | 见开发文档 §2「关键文件索引」 |
+| 数据位置 | 默认 `%APPDATA%\TavernVault`；库设置内可查看并一键打开 |
+
+## 版本历程
+
+<!-- 维护约定：新版本在此加一行【主题】（≤30 字）；详细内容写 development-handoff.md §9.1 与 §3 新小节，不在此复述 -->
+
+| 版本 | 主题 |
+|---|---|
+| v0.7.x | 预设可视化三期 → 酒馆只读托管+导出副本 → 自动重扫 → 收纳入库 → 集成测试+CI → 内嵌书合入 → 便携模式 → 应用图标（明细见开发文档 §9.1） |
+| v0.6.x | 格式对齐（5 类模板分类回撤）+ 新建文件 + 自包含打包 |
+| v0.5.x | 安全与可靠性加固系列：会话令牌、备份加固、编辑器重构、UI 清单、奥卡姆修剪 |
+| v0.4.x | 酒馆接入、多库管理、三逻辑库、手风琴布局 |
+| v0.1–v0.3 | 初版 → 内嵌世界书 → 另存为与备份 → 预设可视化一二期的打磨 |
+
+## 路线图
+
+完整的已完成 / 未完成 / 已砍掉清单见 [`docs/development-handoff.md` §11](docs/development-handoff.md)。当前队列：**开放仓库前的全量隐私审计（v1.0.0 门禁）**。
+
+## 图标
+
+应用图标由 [`tools/gen_icon.py`](tools/gen_icon.py) 生成（烧瓶 = 酒馆·药剂意象，锁孔 = Vault 保险库意象，靛蓝药液对齐应用主题色），单一几何源同时产出 `.ico`（exe + 窗口，256→16 共 7 档，小尺寸自动省略细节）与网页 favicon（SVG + PNG）。改配色或造型后重跑脚本即可再生。
 
 ## 许可证
 

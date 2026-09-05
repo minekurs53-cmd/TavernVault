@@ -8,10 +8,16 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>TavernVault.App</RootNamespace>
     <AssemblyName>TavernVault</AssemblyName>
-    <Version>0.7.0.0</Version>
+    <Version>0.7.8.0</Version>
     <Product>酒馆资源管家</Product>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
   </PropertyGroup>
+
+  <!-- 窗口图标:MainWindow.Icon 以 pack URI 引用,须作为 Resource 参与编译 -->
+  <ItemGroup>
+    <Resource Include="Assets\app.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

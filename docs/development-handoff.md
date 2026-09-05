@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.7.9** · 最后更新：2026-09-05
+> 当前版本：**v1.0.0** · 最后更新：2026-09-05
 
 ---
 
@@ -636,11 +636,13 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 | v0.7.7 | 合入本地追加 + 便携模式 | 详见 §3.23。合入重构为编辑会话内本地追加（用户反馈：缺确认/直接落盘）；--portable 便携模式；集成 +2=16 |
 | v0.7.8 | 应用图标 | 详见 §3.24。`tools/gen_icon.py` 单一几何源 → ico(7 档)/favicon.svg/png 三资产；exe+窗口+网页三处接线；README 头图 |
 | v0.7.9 | 图标重设计 | 详见 §3.25。10 候选工具化（`tools/icon_candidates.py`）→ 用户选定文件夹+叠卡；明亮简约·翠绿四层阶；gen_icon.py 重写三资产再生 |
+| v1.0.0 | **首个正式版 + 发布门禁** | 隐私全量审计（gitleaks 全历史零泄露 + cookie/凭据/局域网 IP 专项零命中 + 仓库设置核清）；git filter-repo 历史重写（代理端口泛化 + 作者名归一，blob 级校验）+ 双分支 force push；版本号升至 1.0.0；GitHub Release 挂自包含包（发布前以 dist 产物实跑全量冒烟 207）；仓库转公开；README 末尾新增「项目自评：优点与不足」 |
 
 ### 9.2 当前状态（截至 2026-09-05）
 
-- 分支 `qoder/TavernVault`；v0.7.9 已推送，且全历史已经 filter-repo 重写 + force push（门禁脱敏，
-  见 §11）。**注意：外部协作者/其他克隆需重新 clone，旧 SHA 全部失效。**
+- 分支 `qoder/TavernVault`；**v1.0.0 已发布**（Release 挂自包含包）且仓库已转公开。全历史已经
+  filter-repo 重写 + force push（门禁脱敏，见 §11）。**注意：外部协作者/其他克隆需重新 clone，
+  旧 SHA 全部失效。**
 - **项目已进入真实使用阶段**（用户自用 ST/TT 各 70+ 资源）：需求与优先级以真实使用反馈为准。
 - 验证情况：Release 构建 0 警告 0 错误；单测 93/93 + preset-model 18/18 + 集成 16/16；冒烟 207 全绿；
   图标 v2（明亮简约·翠绿文件夹叠卡）三资产生成并接线（exe/窗口/favicon/README 四处生效）。

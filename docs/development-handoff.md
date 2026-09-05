@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.7.7** · 最后更新：2026-09-05
+> 当前版本：**v0.7.8** · 最后更新：2026-09-05
 
 ---
 
@@ -418,6 +418,23 @@ v0.5.2 依据 `docs/full-audit-v0.5.0.md` 路线图完成备份可靠性、编�
 - **测试**：单测 93（MergeTests 随 AppendBook 移除）、集成 16、冒烟 207（合入段随端点移除；
   合入的 UI 逻辑由浏览器实跑覆盖：追加不写盘 → 保存落盘核对 → 放弃无保存前写入）。
 
+### 3.24 v0.7.8：应用图标——单一几何源产出三资产
+
+设计：暗色圆角瓷片 + 圆底烧瓶（酒馆·药剂意象）+ 靛蓝药液（对齐应用主题色 `#4c6ef5` 系）+ 锁孔
+（Vault 保险库意象）；浅色/深色桌面底、256→16 全尺寸自检拼图逐档目验。落地 `tools/gen_icon.py`
+（Pillow，入库可复生）：一份 512 坐标系几何同时产出三种资产，杜绝漂移：
+
+- **`Assets/app.ico`**：256/128/64/48/32/24/16 七档 PNG 帧手工组装 ICO 容器（Vista+ 标准）；
+  **≤48 档自动省略锁孔与气泡**（16px 可读性优先，64 起保留细节）。接线三处：csproj
+  `<ApplicationIcon>`（exe 图标）+ `<Resource Include>` + `MainWindow.Icon="Assets/app.ico"`
+  （标题栏/任务栏）。
+- **`wwwroot/favicon.svg` + `favicon.png`（32px）**：替换 🏺 emoji 占位；`index.html` 引用带 `?v=` 防缓存。
+- **README 头图**：H1 内联直接引用 favicon.svg，不复制资产。
+- **矢量轮廓技巧**：Pillow 无矢量描边——先画外扩 4px 实心轮廓层、再画正常填充层盖掉内半圈，
+  瓶颈/口沿/瓶身三个形状合一轮廓；SVG 同构（描边组在下、填充组在上），无 arc 拼接（药液用 clipPath 裁圆）。
+- **踩坑**：CORK 元组曾几何(5 元)与颜色混用——作为 fill 传入时 Pillow 报"color must be int or
+  tuple of one/three/four"；颜色常量与几何常量必须分离。
+
 ### 3.21 v0.7.4：API 集成测试进 dotnet test + GitHub Actions CI
 
 §11 复审"开源前工程底线"项落地，摆脱"手工起服务再跑冒烟脚本"两步走：
@@ -597,13 +614,20 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 | v0.7.1 | **真实使用反馈收口** | 详见 §3.18。实测酒馆不实时读外部修改且冷生效会被内存缓存回写覆盖——酒馆来源就地编辑退役（PUT 403），改「导出副本到局外存储」一键流；新增侧栏「修改历史」（备份清单聚合）与库设置「数据目录」可视化；openDrawer 跨库缓存未命中修复；未完成路线必要性全面复审（断链提示/白名单砍掉，FWatcher 上调）；冒烟 183×2 |
 | v0.5.3 | **v0.5.x 收尾** | UI 清单实跑 12 项全过（index.html 加 `?token=` 回退供外部浏览器冒烟；顺带修复内联脚本语法错误）；奥卡姆剃刀修剪无用代码（2 个旧重载、WriteText 包装、debounce、Console.WriteLine、2 份被取代的评审文档） |
 | v0.5.2 | **可靠性收尾 + 编辑器重构 + 测试补齐（full-audit §8 路线）** | 详见 §3.12。备份：Load 保留幽灵记录 + LoadWarning、RelocateTo 两阶段迁移；move 补写前备份（N4）；编辑器：Tab AbortController + 保存双视图互刷 + Esc 栈顶让位（两条静默数据丢失链切断）+ 409 自动重扫（N5）；App：9 端点异常收编、请求体上限 21MB、WebView2 UDF 搬家 + 导航拦截；测试：TavernGuardTests 6 项 + 冒烟酒馆护栏/错误合同两段，删除 Unit1 空壳 |
+| v0.7.2 | 文件监视自动重扫 | 详见 §3.19。`VaultWatcher`（每库根 FileSystemWatcher，800ms 防抖增量 Rescan，Error 降级重建）；前端 5s 轮询 lastScanAt；textarea 全局主题修复；冒烟复审后 192 |
+| v0.7.3 | 收纳入库 | 详见 §3.20。散乱文件夹按内容识别批量复制进库类型子目录（源不动/可选移动/重名序号）；单测 +3 |
+| v0.7.4 | 集成测试 + CI | 详见 §3.21。真实 Kestrel 集成测试 14 项 + GitHub Actions（windows-latest 全测试链） |
+| v0.7.5 | README 重写 + MIT | 结构化分区 + 维护约定注释；LICENSE(MIT)；文档版本收敛 |
+| v0.7.6 | 内嵌书合入 | 详见 §3.22。独立世界书一键追加进卡片内嵌书（服务端实现，次版重构） |
+| v0.7.7 | 合入本地追加 + 便携模式 | 详见 §3.23。合入重构为编辑会话内本地追加（用户反馈：缺确认/直接落盘）；--portable 便携模式；集成 +2=16 |
+| v0.7.8 | 应用图标 | 详见 §3.24。`tools/gen_icon.py` 单一几何源 → ico(7 档)/favicon.svg/png 三资产；exe+窗口+网页三处接线；README 头图 |
 
 ### 9.2 当前状态（截至 2026-09-05）
 
-- 分支 `qoder/TavernVault`；v0.7.3/v0.7.4 已推送（`2c26fc8`/`05f539f`，CI 已绿）。
+- 分支 `qoder/TavernVault`；v0.7.6/v0.7.7 已推送（`031a00d`/`9e30e42`），v0.7.8 待推送。
 - **项目已进入真实使用阶段**（用户自用 ST/TT 各 70+ 资源）：需求与优先级以真实使用反馈为准。
-- 验证情况：Release 构建 0 警告 0 错误；单测 93/93 + preset-model 18/18 + 集成 16/16；冒烟 **207 项 × 2 轮全绿**；
-  前端 6 个 js `node --check` 通过；收纳入库浏览器实跑全通（预览分组 → 执行 → 报告 → 磁盘落位核对）。
+- 验证情况：Release 构建 0 警告 0 错误；单测 93/93 + preset-model 18/18 + 集成 16/16；冒烟 207 全绿；
+  图标三资产生成并接线（exe/窗口/favicon/README 四处生效）。
 - 已知边界（实测）：修改历史只覆盖应用内写入（酒馆侧直接改动不产生记录）；收纳来源夹具若含无法
   识别的二进制会进"建议跳过"；AutoWatch 无 UI 开关（settings.json 可改）。
 
@@ -620,7 +644,7 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 1. PNG 卡片仅支持 tEXt 内嵌形式（zTXt/iTXt 极少见，未写）。
 2. 移动/重命名后"收藏/我的标签"靠快照迁移，**已覆盖应用内操作**；外部文件管理器改名仍会丢（需要内容指纹追踪，见 §11）。
 3. 备份按"文件名"归档：两个同名不同目录的文件备份会混在同一子目录（manifest 记录了完整路径，还原不受影响，但列表会混）。
-4. 扫描是手动/操作后触发，无 FileSystemWatcher，外部改动需手动重扫。
+4. 文件监视（AutoWatch）默认常开、无 UI 开关：网络盘等场景 watch 异常时可在 settings.json 改 `AutoWatch:false`。
 5. 界面文案与格式字段面向 SillyTavern 主流格式；非标准文件落到"文本/其他"分类，不会出错。
 
 ---
@@ -649,9 +673,7 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 
 ### 保留（剩余队列）
 
-1. **应用图标设计**（开放仓库前完成）：当前 exe/窗口为默认图标、网页 favicon 是 🏺 emoji 占位。
-   统一设计：瓶/馆意象、深浅底皆可辨识；产出多尺寸 `.ico`（WPF 窗口 + exe）+ SVG favicon + README 配图。
-2. **v1.0.0 发布门禁**：见上方专节（隐私全量审计 → 仓库设置核对 → Release 发布物）。
+1. **v1.0.0 发布门禁**：见上方专节（隐私全量审计 → 仓库设置核对 → Release 发布物）。
 
 ### 推迟（记录备查，不做承诺）
 
@@ -668,6 +690,7 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 
 ### 已完成（历史存档）
 
+- [x] **应用图标**（v0.7.8，见 §3.24）：单一几何源 → ico(7 档)/favicon.svg/png；exe + 窗口 + 网页 + README 四处生效。
 - [x] **便携模式 `--portable`**（v0.7.7）：数据目录随程序目录，拷贝即用；可移植性缩减版落地
   （首启向导已砍——空态引导+收纳+库设置已覆盖首启路径）。
 - [x] **内嵌世界书合入**（v0.7.6，见 §3.22/§3.23）：独立书 → 卡片内嵌书，与导出互为反向。

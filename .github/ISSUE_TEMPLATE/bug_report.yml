@@ -1,0 +1,40 @@
+name: Bug 报告
+description: 功能不工作或行为与文档不符
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请先确认：
+        - 版本号为 v1.0.0 或以上（旧版本请先升级）；
+        - 安全类问题请改走 **Security → Report a vulnerability** 私密通道，不要在这里公开描述。
+  - type: input
+    id: version
+    attributes:
+      label: 版本号
+      description: 界面左下角，或 GET /api/meta 返回的 version 字段
+      placeholder: 例如 v1.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从什么操作开始、点了什么、如何触发
+      placeholder: |
+        1. 打开 …
+        2. 点击 …
+        3. 出现 …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为 与 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志与截图
+      description: 数据目录 logs\tavernvault-YYYYMMDD.log 中的相关行；截图可拖拽粘贴。涉及个人创作内容的文件请勿上传，用结构描述代替。

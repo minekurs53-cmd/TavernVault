@@ -1,7 +1,7 @@
 // 编辑器：角色卡（表单 / 原始JSON）、世界书（条目）、预设/美化/脚本/文本（原始JSON）
 
 import { api } from './api.js';
-import { el, $, icon, hydrateIcons, toast, escapeHtml, confirmDialog } from './util.js';
+import { el, $, icon, hydrateIcons, toast, escapeHtml, confirmDialog, openModal } from './util.js';
 import { refreshItems, refreshMeta, kindMeta } from './app.js';
 import { addPrompt, getGroups, isSystemPrompt, pickGroup, removePrompt, reorderGroup } from './preset-model.js';
 
@@ -108,6 +108,54 @@ export async function openBookEditor(item) {
     body.innerHTML = '';
     body.appendChild(el(`<div class="empty">加载失败：${escapeHtml(e.message)}</div>`));
   }
+}
+
+// 内嵌世界书合入（v0.7.6）：选库里的独立世界书 → 条目规范化追加进卡片内嵌书。
+// 来源可以是酒馆来源（只读复制）；目标卡是酒馆来源时服务端 403（只读托管）。
+async function showBookImport(item) {
+  if (dirty && !(await confirmDialog({
+    title: '有未保存的修改',
+    message: '导入会重新加载内嵌世界书，未保存的修改将丢失。继续导入？',
+    okText: '继续导入', danger: true,
+  }))) return;
+
+  let books;
+  try {
+    books = await api.items({ kind: 'lorebook' });
+  } catch (e) { toast(e.message, 'err'); return; }
+  if (!books.length) { toast('库里还没有独立世界书，可先「新建文件」或收纳入库', 'err'); return; }
+
+  const cardName = item.title || item.fileName.replace(/\.[^.]+$/, '');
+  const body = el(`
+    <div>
+      <h3>从独立世界书导入</h3>
+      <p>选择来源，其全部条目将规范化后**追加**到「${escapeHtml(cardName)}」的内嵌世界书（现有条目不动）。</p>
+      <div class="backup-list"></div>
+      <div class="m-actions"><button class="btn" data-act="close">取消</button></div>
+    </div>`);
+  const mask = openModal(body);
+  const box = body.querySelector('.backup-list');
+  for (const b of books) {
+    const row = el(`<div class="backup-item" style="cursor:pointer" title="点击导入">
+      <span style="flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(b.title || b.fileName)}</span>
+      ${b.rootSource ? '<span class="chip">酒馆</span>' : ''}
+      <span class="b-size">${b.entryCount ?? 0} 条</span>
+    </div>`);
+    row.addEventListener('click', async () => {
+      try {
+        const r = await api.importCardBook(item.id, b.id);
+        mask.remove();
+        toast(`已合入 ${r.added} 个条目（现共 ${r.total} 条）`);
+        await refreshMeta();
+        await refreshItems();
+        await openBookEditor(item); // 重载内嵌书展示新条目
+      } catch (e) { toast(e.message, 'err'); }
+    });
+    box.appendChild(row);
+  }
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('[data-act=close]')) mask.remove();
+  });
 }
 
 export async function closeEditor() {
@@ -410,6 +458,7 @@ async function buildLoreEditor(item, opts = {}) {
         <div class="lore-list-head">
           <div class="row1">
             <span class="count"><b class="lore-count">${entries.length}</b> 个条目</span>
+            ${embedded ? `<button class="btn sm" data-import title="把库里独立世界书的条目追加进来"><span class="ico">${icon('lorebook')}</span>导入</button>` : ''}
             <button class="btn sm" data-add><span class="ico">${icon('plus')}</span>新增</button>
           </div>
           <input class="lore-search" type="text" placeholder="搜索条目…">
@@ -527,6 +576,11 @@ async function buildLoreEditor(item, opts = {}) {
     renderList();
     renderForm();
   });
+
+  // 内嵌世界书合入（v0.7.6）：从库里的独立世界书追加条目（仅内嵌模式显示）
+  const importBtn = body.querySelector('[data-import]');
+  if (importBtn) importBtn.addEventListener('click', () => showBookImport(item));
+
   searchInput.addEventListener('input', renderList);
   // 只绑表单区：搜索框输入不属于编辑内容，不应标脏（v0.5.2）
   bindDirty(body.querySelector('.lore-form'));

@@ -61,7 +61,7 @@ dotnet build TavernVault.slnx -c Release
 ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe
 ```
 
-> 打包命令与产物说明见 `docs/quick-reference.md`；无窗口服务模式（调试/脚本）：加 `--server --port=<端口>`。
+> 打包命令与产物说明见 `docs/quick-reference.md`；无窗口服务模式（调试/脚本）：加 `--server --port=<端口>`；便携模式（数据随程序目录，拷贝即用）：加 `--portable`。
 
 **首次配置三件事（都在界面里）**：
 
@@ -110,7 +110,7 @@ GitHub Actions 每次 push / PR 自动执行构建与全部测试（[`.github/wo
 
 | 版本 | 主题 |
 |---|---|
-| v0.7.x | 预设可视化三期 → 酒馆只读托管+导出副本 → 自动重扫 → 收纳入库 → 集成测试+CI → 内嵌书合入（明细见开发文档 §9.1） |
+| v0.7.x | 预设可视化三期 → 酒馆只读托管+导出副本 → 自动重扫 → 收纳入库 → 集成测试+CI → 内嵌书合入 → 便携模式（明细见开发文档 §9.1） |
 | v0.6.x | 格式对齐（5 类模板分类回撤）+ 新建文件 + 自包含打包 |
 | v0.5.x | 安全与可靠性加固系列：会话令牌、备份加固、编辑器重构、UI 清单、奥卡姆修剪 |
 | v0.4.x | 酒馆接入、多库管理、三逻辑库、手风琴布局 |
@@ -118,7 +118,7 @@ GitHub Actions 每次 push / PR 自动执行构建与全部测试（[`.github/wo
 
 ## 路线图
 
-完整的已完成 / 未完成 / 已砍掉清单见 [`docs/development-handoff.md` §11](docs/development-handoff.md)。当前队列：便携模式 → 应用图标 → **开放仓库前的全量隐私审计（v1.0.0 门禁）**。
+完整的已完成 / 未完成 / 已砍掉清单见 [`docs/development-handoff.md` §11](docs/development-handoff.md)。当前队列：应用图标 → **开放仓库前的全量隐私审计（v1.0.0 门禁）**。
 
 ## 许可证
 

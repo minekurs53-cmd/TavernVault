@@ -92,32 +92,6 @@ public static class CharacterBook
         ["entries"] = new JsonArray(),
     };
 
-    /// <summary>
-    /// 把 sourceBook 的全部条目追加进 cardBook（v0.7.6 内嵌书合入）。
-    /// 来源条目一律规范化为 ST 内部格式写入（丢弃 Spec 原文 Raw）——卡片内嵌书是同一容器同一格式，
-    /// 混入来源原文会造成容器内两种条目格式并存。已有条目经 WriteEntries 原样保留（未编辑条目字节级不变）。
-    /// 追加条目的对象容器键取"现有最大数字键 +1"起算，防与现有键冲突。返回追加条数。
-    /// </summary>
-    public static int AppendBook(JsonObject cardBook, JsonObject sourceBook)
-    {
-        var existing = ReadEntries(cardBook);
-        var incoming = ReadEntries(sourceBook);
-        if (incoming.Count == 0) return 0;
-
-        var next = 0;
-        foreach (var e in existing)
-            if (int.TryParse(e.MapKey, out var k) && k >= next)
-                next = k + 1;
-
-        var merged = new List<BookEntry>(existing);
-        foreach (var e in incoming)
-        {
-            merged.Add(new BookEntry { MapKey = next.ToString(), St = e.St.DeepClone().AsObject(), Raw = null });
-            next++;
-        }
-        WriteEntries(cardBook, merged);
-        return incoming.Count;
-    }
 
     // ---- 内部 ----
 

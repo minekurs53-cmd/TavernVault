@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-05 · 对应 v0.7.6
+> 最后更新：2026-09-05 · 对应 v0.7.7
 
 ## 一分钟了解
 
@@ -68,7 +68,6 @@ GET /api/categories                    # 按根+目录聚合
 ```
 GET/PUT /api/cards/{id}                # PUT: {fields,alternateGreetings,tags} 或 {card} 整卡；酒馆源 403
 GET/PUT /api/cards/{id}/book           # 内嵌世界书；条目带 raw 时保形合并；酒馆源 403
-POST   /api/cards/{id}/book/import     # 内嵌书合入 {sourceId}：独立世界书条目规范化追加（v0.7.6，酒馆源 403）
 GET/PUT /api/lore/{id}                 # 世界书
 GET/PUT /api/text/{id}                 # 文本；.json 保存前校验；酒馆源 403
 ```

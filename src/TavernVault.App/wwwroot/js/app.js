@@ -53,12 +53,6 @@ const KIND_META = {
   character: { label: '角色卡', icon: 'character', color: '#d64f6f' },
   lorebook: { label: '世界书', icon: 'lorebook', color: '#b47909' },
   preset: { label: '预设', icon: 'preset', color: '#7458d6' },
-  // v0.6.0 新类型：图标取现有 PATHS 里语义最近的（preset=滑杆、text=文档、book、settings、list）
-  textgen: { label: '文本补全预设', icon: 'preset', color: '#d6764f' },
-  instruct: { label: '指令模板', icon: 'text', color: '#4f8ed6' },
-  context: { label: '上下文模板', icon: 'book', color: '#4fb3a6' },
-  sysprompt: { label: '系统提示模板', icon: 'settings', color: '#d64f8e' },
-  quickreplies: { label: '快捷回复', icon: 'list', color: '#9a7fd6' },
   theme: { label: '美化', icon: 'theme', color: '#0a84ad' },
   script: { label: '脚本', icon: 'script', color: '#169160' },
   text: { label: '文本', icon: 'text', color: '#64748b' },
@@ -375,7 +369,7 @@ function renderDrawer(item) {
     ? `<img src="${imgSrc(`/api/image/${item.id}`)}" alt="" onerror="this.style.display='none'">`
     : `<span class="ico" style="color:${km.color}">${icon(km.icon)}</span>`;
 
-  const canEdit = ['character', 'lorebook', 'preset', 'textgen', 'instruct', 'context', 'sysprompt', 'quickreplies', 'theme', 'script', 'text'].includes(item.kind);
+  const canEdit = ['character', 'lorebook', 'preset', 'theme', 'script', 'text'].includes(item.kind);
   const stats = [
     { k: '类型', v: `${km.label}${item.hasEmbeddedCard ? ' · 内嵌卡' : ''}` },
     { k: '大小', v: fmtSize(item.sizeBytes) },
@@ -633,10 +627,9 @@ async function showMoveDialog(item) {
 
 // ============ 新建文件（v0.6.0） ============
 
-// 可新建的 11 类（archive/other 无模板意义，不列）；顺序即菜单展示顺序
+// 可新建的 6 类（archive/other 无模板意义，不列）；顺序即菜单展示顺序
 const CREATE_KINDS = [
-  'character', 'lorebook', 'preset', 'textgen', 'instruct',
-  'context', 'sysprompt', 'quickreplies', 'theme', 'script', 'text',
+  'character', 'lorebook', 'preset', 'theme', 'script', 'text',
 ];
 
 let createMenu = null; // 当前打开的新建菜单浮层

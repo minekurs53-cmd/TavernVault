@@ -37,6 +37,18 @@ dotnet build -c Release
 
 首次启动会探测 `%USERPROFILE%\酒馆PR`（存在才注册，不含机器特定路径；也可用环境变量指定酒馆数据目录）并自动扫描，均可在"库设置"中增删。
 
+## 打包（v0.6.1 起）
+
+```bash
+# 自包含单文件：目标机器无需安装 .NET（WebView2 运行时 Win10/11 自带）
+dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true `
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+  -p:DebugType=none -p:AllowedReferenceRelatedFileExtensions=none `
+  -o dist/TavernVault-win-x64
+```
+
+产物 = `TavernVault.exe`（约 153 MB，含 .NET 运行时）+ `wwwroot\` 前端目录，整体拷贝即可分发；数据仍写 `%APPDATA%\TavernVault`，删除目录即卸载。
+
 ## 项目结构
 
 ```
@@ -91,20 +103,27 @@ TavernVault/
 | v0.5.2 | 可靠性收尾与编辑器重构：备份 Load 不丢记录 + RelocateTo 两阶段迁移（中断不再错位）、move 前自动备份、角色卡编辑器重构（保存双视图互刷 / Esc 修复 / 409 自动重扫恢复）、API 异常收编 + 请求体上限、WebView2 数据目录搬家 + 外部导航拦截、酒馆护栏与错误合同测试补齐 |
 | v0.5.3 | v0.5.x 收尾：浏览器 UI 清单 12 项实跑全过（外部浏览器 ?token= 通道）、奥卡姆剃刀修剪无用代码（旧重载 / 无引用导出 / 被取代的文档） |
 | v0.6.0 | 格式对齐 + 新建文件：识别扩至 13 类官方格式（textgen/instruct/context/sysprompt/quickreplies + 主题字段修正）、独立世界书容器保形（Spec V2/NovelAI 数组格式不再损坏）、11 类一键新建模板（创建即编辑）、酒馆接入目录扩至 11 项；单测 100、冒烟 191 |
+| v0.6.1 | 分类回撤 + 首次打包：移除侧栏 5 类官方模板分类（文本补全预设/指令模板/上下文模板/系统提示模板/快捷回复——缺乏编辑价值且个别规则会误收预设文件），相关文件回落"文本/脚本"（原文编辑器仍可用）、新建模板收敛为 6 类、酒馆接入目录回撤至 5 个功能分区；索引版本 3→4 自动重建（收藏/标签按快照回填）；win-x64 打包；单测 90、冒烟 168 |
 
 后续方向（按优先级）：
-1. **预设可视化三期**：拖拽排序（写 `prompt_order.order`）、新增/删除提示词（系统项防误删）、角色分组切换
+1. **预设可视化三期**（编辑能力补全；现状：可视化视图已支持采样参数编辑、生效顺序勾选启停、提示词详情编辑，但顺序不可调整、条目不可增删）：
+   - **拖拽排序**：生效顺序列表支持拖拽调整，保存时按新顺序重写 `prompt_order[].order` 数组次序（只动顺序与 `enabled`，不碰 `prompts[]` 本体）
+   - **新增提示词**：表单化创建（名称/角色/内容），生成 identifier 后同时写入 `prompts[]` 与 `order[]` 末尾
+   - **删除提示词**：从 `prompts[]` 与所有 `order[]` 分组同步移除；`system_prompt === true` 等 marker 系统项禁删防误操作
+   - **角色分组切换**：`prompt_order` 支持多 `character_id` 分组，可视化视图提供分组切换（默认仍为 100001）
 2. 内嵌世界书合入（从独立世界书导入到卡片；导出已支持）
-3. **格式识别对齐酒馆官方**（对照表见 `development-handoff.md` §3.13）：独立世界书容器保形（数组/Spec-V2 条目）、主题字段清单修正、补齐文本补全预设 / instruct / context / sysprompt / QuickReplies 识别
-4. **新建文件**：各分类一键新建空白模板（角色卡 / 世界书 / 预设 / 美化 / 正则脚本），创建后直接进入编辑器
-5. 酒馆接入增强：聊天 → 角色卡反向引用检查（改名前提示断链）、接入子目录白名单可配置
-6. **可移植性**（v0.4.3 起步）：首次启动向导、探测规则配置化、可选便携模式——让项目在任何电脑开箱即用
-7. 重复资源检测（按内容指纹）
-8. FileSystemWatcher 监视目录变化自动重扫；批量操作（多选移动/打标）
+3. 酒馆接入增强：聊天 → 角色卡反向引用检查（改名前提示断链）、接入子目录白名单可配置
+4. **可移植性**（v0.4.3 起步）：首次启动向导、探测规则配置化、可选便携模式——让项目在任何电脑开箱即用
+5. 重复资源检测（按内容指纹）
+6. FileSystemWatcher 监视目录变化自动重扫；批量操作（多选移动/打标）
+
+已完成（历史路线存档）：
+- ~~格式识别对齐酒馆官方~~ ✅ v0.6.0 落地——主题字段修正与独立世界书容器保形保留至今；其中 5 类官方模板分类（textgen/instruct/context/sysprompt/quickreplies）因缺乏编辑价值且误收预设文件，v0.6.1 回撤
+- ~~新建文件~~ ✅ v0.6.0 完成（11 类模板 + 创建即编辑；v0.6.1 收敛为 6 类）
 
 已知边界：
 - PNG 卡片仅支持 tEXt 形式的内嵌数据（ST 标准形式；zTXt/iTXt 极少见，暂不写）
-- 识别覆盖 SillyTavern 官方 13 类资源；非标准文件落到"文本/其他"分类，不会出错
+- 识别覆盖 SillyTavern 官方主流资源 5 大类（角色卡/世界书/预设/美化/脚本）；官方模板类 JSON（textgen/instruct/context/sysprompt/quickreplies）与非标准文件统一落"文本/脚本"分类，原文编辑器仍可编辑，不会出错
 - 适合后续扩展的点：`ApiServer.MapApi`（加端点）、`editor.js`（加编辑器）、`TypeDetector`（加类型识别）、Core 层可直接复用做 CLI 或托盘工具
 
 ## 测试

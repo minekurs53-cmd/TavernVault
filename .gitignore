@@ -7,3 +7,4 @@ testdata/
 testdata-server/
 .smoke/
 __pycache__/
+dist/

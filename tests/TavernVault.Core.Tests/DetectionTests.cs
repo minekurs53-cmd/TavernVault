@@ -7,9 +7,10 @@ using TavernVault.Core.Storage;
 namespace TavernVault.Core.Tests;
 
 /// <summary>
-/// v0.6.0 格式识别对齐 SillyTavern 官方：
-/// 新增 5 类（textgen / instruct / context / sysprompt / quickreplies）、主题键名对齐、
-/// 识别优先级（精确特征优先于宽松特征）、独立世界书数组容器保形。
+/// 格式识别回归：
+/// v0.6.1 回撤 v0.6.0 新增的 5 类（textgen / instruct / context / sysprompt / quickreplies）——
+/// 这些分类缺乏编辑价值且个别规则会误收预设文件，官方模板类 JSON 统一回落
+/// "文本"或"脚本"（原文编辑器仍然可用）；主题键名对齐与独立世界书数组容器保形保留。
 /// 夹具字段均取自官方仓库真实文件（来源见各用例注释）。
 /// </summary>
 public class DetectionTests : IDisposable
@@ -105,119 +106,72 @@ public class DetectionTests : IDisposable
         ["idIndex"] = 1,
     };
 
-    // ---------- 新类型：识别 ----------
+    // ---------- 回撤 5 类后的回落归类（v0.6.1） ----------
 
     [Fact]
-    public void Detect_TextGenPreset_ByTempAndRepPen()
+    public void Detect_TextGenPreset_FallsBackToText()
     {
-        // 核心规则：官方 textgen 预设（Universal-Light / Deterministic.json 实测）temp 与 rep_pen 恒同在
-        var json = new JsonObject { ["temp"] = 0.7, ["rep_pen"] = 1.1 };
-        Assert.Equal(ItemKind.TextGenPreset, TypeDetector.DetectJson(json));
+        // 官方 textgen 预设不再设专属分类：采样参数 JSON 归"文本"（原文编辑器可用）
+        Assert.Equal(ItemKind.Text, TypeDetector.DetectJson(TextGenPresetJson()));
     }
 
     [Fact]
-    public void Detect_TextGenPreset_BySamplerFields()
+    public void Detect_InstructTemplate_FallsBackToText()
     {
-        // 次级规则：无 temp/rep_pen 时命中 ≥3 个官方采样字段（top_k / min_p / add_bos_token / …）
-        var json = new JsonObject
-        {
-            ["top_k"] = 40,
-            ["min_p"] = 0.05,
-            ["add_bos_token"] = true,
-            ["temperature_last"] = true,
-        };
-        Assert.Equal(ItemKind.TextGenPreset, TypeDetector.DetectJson(json));
+        // 官方 instruct 模板无 {name, content} 对 → 归"文本"
+        Assert.Equal(ItemKind.Text, TypeDetector.DetectJson(InstructTemplateJson()));
     }
 
     [Fact]
-    public void Detect_TextGenPreset_NotMisreadAsTheme()
+    public void Detect_ContextTemplate_FallsBackToText()
     {
-        // 优先级：精确采样特征（temp+rep_pen）优先于主题的"两键即中"宽松规则
-        var json = TextGenPresetJson();
-        json["main_text_color"] = "rgba(0,0,0,1)";
-        json["blur_strength"] = 1;
-        Assert.Equal(ItemKind.TextGenPreset, TypeDetector.DetectJson(json));
+        // 官方 context 模板（story_string 等）→ 归"文本"
+        Assert.Equal(ItemKind.Text, TypeDetector.DetectJson(ContextTemplateJson()));
     }
 
     [Fact]
-    public void Detect_TextGenPreset_NotMisreadAsChatPreset()
+    public void Detect_SysPromptFile_CountsAsScript()
     {
-        // 优先级：prompts 数组（OpenAI 对话预设）先于采样字段判定
+        // {name, content, post_history} 含 {name, content} 对 → 与裸两键一样按"脚本"处理
+        Assert.Equal(ItemKind.Script, TypeDetector.DetectJson(SysPromptJson()));
+    }
+
+    [Fact]
+    public void Detect_BareNameContent_StillScript()
+    {
+        // 裸 {name, content} 与酒馆助手脚本无法区分 → 按脚本
+        var json = new JsonObject { ["name"] = "脚本", ["content"] = "console.log(1)" };
+        Assert.Equal(ItemKind.Script, TypeDetector.DetectJson(json));
+    }
+
+    [Fact]
+    public void Detect_QuickReplies_FallsBackToText()
+    {
+        // 官方快捷回复 v2 集（qrList 数组）→ 归"文本"
+        Assert.Equal(ItemKind.Text, TypeDetector.DetectJson(QuickRepliesJson()));
+    }
+
+    [Fact]
+    public void Detect_PromptsArray_StillPreset()
+    {
+        // 回撤不影响主分类：prompts 数组（OpenAI 对话预设）恒判"预设"，
+        // 即使同时携带大量采样字段（v0.6.0 曾被 textgen 规则误收的场景，规则删除后自然消除）
         var json = TextGenPresetJson();
         json["prompts"] = new JsonArray(new JsonObject { ["identifier"] = "main" });
         Assert.Equal(ItemKind.Preset, TypeDetector.DetectJson(json));
     }
 
     [Fact]
-    public void Detect_InstructTemplate()
+    public void Detect_SamplerPlusThemeKeys_ThemeWins()
     {
-        Assert.Equal(ItemKind.InstructTemplate, TypeDetector.DetectJson(InstructTemplateJson()));
+        // textgen 规则删除后，同时含采样字段与 ≥2 主题键的文件按既有主题规则判定
+        var json = TextGenPresetJson();
+        json["main_text_color"] = "rgba(0,0,0,1)";
+        json["blur_strength"] = 1;
+        Assert.Equal(ItemKind.Theme, TypeDetector.DetectJson(json));
     }
 
-    [Fact]
-    public void Detect_InstructTemplate_NeedsTwoSequences()
-    {
-        // 单一序列字段不足以判定（避免把普通字符串配置误收）
-        var json = new JsonObject { ["input_sequence"] = "<|user|>" };
-        Assert.Equal(ItemKind.Text, TypeDetector.DetectJson(json));
-    }
-
-    [Fact]
-    public void Detect_ContextTemplate()
-    {
-        Assert.Equal(ItemKind.ContextTemplate, TypeDetector.DetectJson(ContextTemplateJson()));
-    }
-
-    [Fact]
-    public void Detect_ContextTemplate_StoryStringAlone()
-    {
-        // story_string 最具区分性，可单独命中（官方 context/ 全部模板均含它）
-        var json = new JsonObject { ["story_string"] = "{{description}}", ["name"] = "x" };
-        Assert.Equal(ItemKind.ContextTemplate, TypeDetector.DetectJson(json));
-    }
-
-    [Fact]
-    public void Detect_ContextTemplate_SecondaryKeysWithoutStoryString()
-    {
-        var json = new JsonObject { ["names"] = true, ["example_separator"] = "***" };
-        Assert.Equal(ItemKind.ContextTemplate, TypeDetector.DetectJson(json));
-    }
-
-    [Fact]
-    public void Detect_SysPrompt_TakesPrecedenceOverScript()
-    {
-        // 优先级：{name, content, post_history} 是 sysprompt 精确特征，
-        // 必须先于脚本判定（官方 default/content/presets/sysprompt/*.json 三个键）
-        Assert.Equal(ItemKind.SysPrompt, TypeDetector.DetectJson(SysPromptJson()));
-    }
-
-    [Fact]
-    public void Detect_BareNameContent_StillScript()
-    {
-        // 裸 {name, content} 与酒馆助手脚本无法区分（官方 sysprompt 也可能只存两键）→ 按脚本
-        var json = new JsonObject { ["name"] = "脚本", ["content"] = "console.log(1)" };
-        Assert.Equal(ItemKind.Script, TypeDetector.DetectJson(json));
-    }
-
-    [Fact]
-    public void Detect_QuickReplies_V2()
-    {
-        Assert.Equal(ItemKind.QuickReplies, TypeDetector.DetectJson(QuickRepliesJson()));
-    }
-
-    [Fact]
-    public void Detect_QuickReplies_LegacyContainer()
-    {
-        // 旧命名 {quickReplies: [...]} 兼容
-        var json = new JsonObject
-        {
-            ["name"] = "旧快捷回复",
-            ["quickReplies"] = new JsonArray(new JsonObject { ["label"] = "继续", ["mes"] = "/continue" }),
-        };
-        Assert.Equal(ItemKind.QuickReplies, TypeDetector.DetectJson(json));
-    }
-
-    // ---------- 主题键名对齐 ----------
+    // ---------- 主题键名对齐（v0.6.0 保留项） ----------
 
     [Fact]
     public void Detect_Theme_OfficialColorKeys()
@@ -259,17 +213,13 @@ public class DetectionTests : IDisposable
         Assert.Equal(ItemKind.Theme, TypeDetector.DetectJson(theme));
     }
 
-    // ---------- 酒馆子目录探测扩充 ----------
+    // ---------- 酒馆子目录清单（v0.6.1 回撤后与官方功能分区一致） ----------
 
     [Fact]
-    public void TavernDetector_Subdirs_ContainOfficialPresetDirs()
+    public void TavernDetector_Subdirs_MatchOfficialFunctionalDirs()
     {
-        // 官方 src/constants.js USER_DIRECTORY_TEMPLATE 对应目录（v0.6.0 扩充后保留既有 5 个）
         Assert.Equal(
-            [
-                "characters", "worlds", "OpenAI Settings", "themes", "regex",
-                "TextGen Settings", "TextGeneration Settings", "instruct", "context", "sysprompt", "QuickReplies",
-            ],
+            ["characters", "worlds", "OpenAI Settings", "themes", "regex"],
             TavernDetector.Subdirs);
     }
 
@@ -371,10 +321,10 @@ public class DetectionTests : IDisposable
         Assert.Equal("新内容", appended["content"]?.GetValue<string>());
     }
 
-    // ---------- 扫描端到端：新类型落库 ----------
+    // ---------- 扫描端到端：回撤后落库归类 ----------
 
     [Fact]
-    public void Scan_Classifies_NewKinds_ByContent()
+    public void Scan_Classifies_RevertedKinds_ByContent()
     {
         File.WriteAllText(Path.Combine(_dir, "p1.json"), TextGenPresetJson().ToJsonString());
         File.WriteAllText(Path.Combine(_dir, "p2.json"), InstructTemplateJson().ToJsonString());
@@ -387,11 +337,12 @@ public class DetectionTests : IDisposable
         vault.AddRoot(_dir);
         vault.Rescan();
 
-        Assert.Contains(vault.Items, i => i.Kind == ItemKind.TextGenPreset);
-        Assert.Contains(vault.Items, i => i.Kind == ItemKind.InstructTemplate);
-        Assert.Contains(vault.Items, i => i.Kind == ItemKind.ContextTemplate);
-        Assert.Contains(vault.Items, i => i.Kind == ItemKind.SysPrompt);
-        Assert.Contains(vault.Items, i => i.Kind == ItemKind.QuickReplies);
+        Assert.Contains(vault.Items, i => i.Kind == ItemKind.Text && i.FileName == "p1.json");
+        Assert.Contains(vault.Items, i => i.Kind == ItemKind.Text && i.FileName == "p2.json");
+        Assert.Contains(vault.Items, i => i.Kind == ItemKind.Text && i.FileName == "p3.json");
+        Assert.Contains(vault.Items, i => i.Kind == ItemKind.Script && i.FileName == "p4.json");
+        Assert.Contains(vault.Items, i => i.Kind == ItemKind.Text && i.FileName == "p5.json");
         Assert.Contains(vault.Items, i => i.Kind == ItemKind.Lorebook && i.EntryCount == 2); // 数组容器世界书
+        Assert.DoesNotContain(vault.Items, i => i.Kind == ItemKind.Preset);
     }
 }

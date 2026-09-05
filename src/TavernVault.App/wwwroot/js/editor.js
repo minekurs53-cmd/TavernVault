@@ -71,7 +71,7 @@ function mountEditor(item, title, tabsHtml = '') {
 }
 
 export async function openEditor(item) {
-  const editable = ['character', 'lorebook', 'preset', 'textgen', 'instruct', 'context', 'sysprompt', 'quickreplies', 'theme', 'script', 'text']; // v0.6.0 新类型走通用原文编辑器
+  const editable = ['character', 'lorebook', 'preset', 'theme', 'script', 'text'];
   if (!editable.includes(item.kind)) {
     toast('该类型暂不支持在程序内编辑', 'err');
     return;

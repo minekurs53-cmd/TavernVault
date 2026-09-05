@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.6.0（工作区，待提交）** · 最后更新：2026-09-03
+> 当前版本：**v0.6.1** · 最后更新：2026-09-05
 
 ---
 
@@ -135,8 +135,9 @@ App：
 - **内容识别**（`TypeDetector`）：按文件内容而非文件夹名判断 8 类（character/lorebook/preset/theme/script/text/archive/other）。
 - **条目 Id**：完整路径的哈希（`LibraryScanner.ComputeId`）。路径变了 Id 就变，所以重命名/移动后要做用户数据迁移。
 - **增量复用**：路径+大小+修改时间都没变的文件直接复用旧条目（含收藏/标签），大库重扫从秒级降到毫秒级。
-- **索引版本门控**（`SettingsStore.IndexVersion = 3`）：条目模型变化时 +1，旧索引直接丢弃全量重建，
-  避免增量扫描复用缺少新字段的旧条目（v0.4.0 加 `RootSource` 时就靠这个机制 2→3）。
+- **索引版本门控**（`SettingsStore.IndexVersion = 4`）：条目模型或识别规则变化时 +1，旧索引直接丢弃全量重建，
+  避免增量扫描复用缺少新字段的旧条目（v0.4.0 加 `RootSource` 2→3；v0.6.1 回撤 5 类模板分类时 3→4，
+  旧索引里的 kind 数字 8-12 已失效，收藏/标签由扫描快照回填不丢失）。
 - **点目录过滤**：跳过 `.git` 等隐藏目录。
 
 ### 3.6 备份系统
@@ -240,12 +241,39 @@ v0.5.2 依据 `docs/full-audit-v0.5.0.md` 路线图完成备份可靠性、编�
 
 ### 3.15 v0.6.0：格式对齐落地 + 新建文件
 
+> **v0.6.1 注**：本节的「格式识别对齐」中，5 类官方模板分类（textgen/instruct/context/sysprompt/quickreplies）
+> 已于 v0.6.1 回撤（缺乏编辑价值且个别规则误收预设文件），详见 §3.16；主题键名修正、独立世界书容器保形、
+> 新建文件（收敛为 6 类）均保留。
+
 §3.14 的对照结论在本版本落地，外加"新建文件"特性：
 
 - **格式识别对齐**（TypeDetector）：ItemKind 扩至 13 类（新增 textgen/instruct/context/sysprompt/quickreplies，枚举值追加末尾保证旧索引不错位）。识别特征均对照官方源码核实：textgen=`temp`+`rep_pen` 核心或 ≥3 采样键（官方名为 `typical_p`/`mirostat_tau` 等，`typical`/`mirostat_lr` 不存在）；instruct=≥2 个 `*_sequence` 字段；context=`story_string` 单独命中；sysprompt=`{name,content,post_history}` 三键（`post_history` 是与脚本的区分特征，裸 `{name,content}` 仍归脚本）；quickreplies=`qrList`/`quickReplies` 数组。ThemeKeys 修正为官方名（`italics_text_color`/`quote_text_color`/`blur_tint_color`；`bogus_folders` 经核实为官方字段，保留）。`TavernDetector.Subdirs` 扩至 11 项（官方 "TextGen Settings" + 旧约定 "TextGeneration Settings" 双收）。
 - **独立世界书容器保形**：`GET /api/lore` 支持 entries 数组容器（Spec V2/NovelAI 导出）——经 CharacterBook Spec→ST 转换返回统一条目 + `raw`，响应附 `container:"object"|"array"`；PUT 按 container 保形合并（数组容器不再被改写为对象）；saveas 同样保形。`CharacterBook.WriteEntries` 顺带强化：未编辑条目（与转换结果一致）直接写回 Raw 原文，实现"字节级不变"（内嵌书流程同样受益——旧实现会给未编辑条目补默认值）。
 - **新建文件**：`ContentTemplates`（Core/Templates.cs）为 10 个 JSON 类 + text 提供官方格式骨架，硬验收=模板必须被自家 TypeDetector 识别回原 kind（单测 + 冒烟双层覆盖）；`POST /api/items/create`（重名自动 "(n)" 序号；仅普通库根，酒馆来源 400）；前端 topbar「新建」按钮（仅局外库显示）→ 11 类菜单 → 命名 → 创建后直接进入编辑器。editor.js/app.js 可编辑白名单同步扩至 11 类（新类型走通用原文编辑器）。
 - **测试**：单测 100 项（+DetectionTests 20、TemplatesTests 21）；冒烟 191 项（+格式识别对齐、新建文件两段）。UI 目检：新建世界书/文本补全预设全流程通过。
+
+### 3.16 v0.6.1：回撤 5 类官方模板分类 + 首次打包
+
+实践检验后回撤 v0.6.0 的一部分：侧栏的 **文本补全预设 / 指令模板 / 上下文模板 / 系统提示模板 / 快捷回复** 5 个分类
+没有存在必要——它们都只能走通用原文编辑器（无专属编辑能力，分类不带来任何功能差异），且个别识别规则
+（textgen 的"≥3 采样字段即命中"）会误收带采样器的预设文件。决策原则与 v0.5.3 一致：奥卡姆剃刀。
+
+- **回撤内容**：`ItemKind` 删 5 个枚举值回到 8 类；`TypeDetector` 删 textgen/instruct/context/sysprompt/quickreplies
+  五组识别规则（`{name,content,post_history}` 官方 sysprompt 文件与裸 `{name,content}` 同规则归"脚本"，
+  其余模板 JSON 回落"文本"）；`ContentTemplates` 新建模板收敛为 6 类（character/lorebook/preset/theme/script/text）；
+  `TavernDetector.Subdirs` 回撤至 5 个官方功能分区（characters/worlds/OpenAI Settings/themes/regex）——
+  接入向导不再注册模板类目录，其中的 JSON 仍按内容落"文本/脚本"可浏览可编辑。
+- **保留内容**（v0.6.0 中经得起检验的部分）：ThemeKeys 官方字段名修正、独立世界书数组容器保形（Spec V2/NovelAI）、
+  新建文件机制本身、预设可视化二期编辑能力。
+- **索引冷升级**：`IndexVersion` 3→4，旧索引（含失效 kind 数字 8-12）整体作废重建；收藏/标签随扫描快照回填，
+  `index.bak` 留档上一版。
+- **首次打包**：`dotnet publish -r win-x64 --self-contained -p:PublishSingleFile=true`（含
+  `IncludeNativeLibrariesForSelfExtract` / `DebugType=none` / `AllowedReferenceRelatedFileExtensions=none`），
+  产物 = 单文件 `TavernVault.exe`（约 153 MB，内嵌 .NET 10 运行时）+ `wwwroot\` 前端目录（AppContext.BaseDirectory
+  定位，与 exe 同级分发）；已实跑 `--server` 模式验证 API 与版本号。命令与产物说明见 README「打包」。
+- **测试**：单测 90 项（DetectionTests 5 类用例改为回落断言 + 误收回归；TemplatesTests 收敛）；冒烟 168 项
+  （识别夹具改断言回落、create 段收敛 6 类、新增"采样字段+prompts 恒判预设"与"kind=textgen 400"两条回归），
+  同数据目录连跑两轮全绿。前端 5 个 js `node --check` 通过。
 
 ---
 
@@ -284,6 +312,7 @@ v0.5.2 依据 `docs/full-audit-v0.5.0.md` 路线图完成备份可靠性、编�
 | DELETE | `/api/roots` | 移除库根 `{path}`（不动文件本身） |
 | POST | `/api/tavern/detect` | 检测本机酒馆安装与可接入子目录 |
 | POST | `/api/tavern/connect` | 按来源批量注册酒馆子目录为库根 |
+| POST | `/api/items/create` | 新建文件 `{kind,name,root?}`。仅普通库根（酒馆来源 400）；kind 限 6 个可模板化类型（character/lorebook/preset/theme/script/text），archive/other 与未知键 400；重名自动 "(n)" 序号 |
 | POST | `/api/pick-folder` | 原生文件夹选择框（无窗口模式返回 400） |
 | GET | `/api/categories` | 按根+相对目录聚合的目录计数（用于旧目录筛选） |
 
@@ -298,7 +327,7 @@ v0.5.2 依据 `docs/full-audit-v0.5.0.md` 路线图完成备份可靠性、编�
   - 读取时统一转 ST 格式并把 Spec 原条目放 `Raw`；写回时 Spec 条目只合并被编辑字段，`Raw` 里的 `id/selective/use_regex/extensions` 等原样保留。**容器形态（数组/对象）不变。**
 - **预设**：`prompts[]` + `prompt_order[]`。⚠️ **`prompt_order[i].order[j]` 的启用字段是 `enabled`，不是 `enable`**（真实 ST 文件实测）。`prompts[j].system_prompt===true` 表示系统管理项（内容只读）。
 - **世界书**：`entries` 为对象（键=索引）或数组；ST 格式字段 `key/keysecondary/content/comment/constant/disable/order/position/depth/probability`。
-- **库根（settings.json）**：`LibraryRoots` 为对象数组 `[{"Path":"...","Source":0|1|2}]`（0=Normal、1=TavernST、2=TauriTavern）。`LibraryRootConverter` 反序列化时兼容旧版纯字符串数组（自动按 Normal 处理）。索引版本已升到 3（条目新增 `RootSource`），旧索引会丢弃重建。
+- **库根（settings.json）**：`LibraryRoots` 为对象数组 `[{"Path":"...","Source":0|1|2}]`（0=Normal、1=TavernST、2=TauriTavern）。`LibraryRootConverter` 反序列化时兼容旧版纯字符串数组（自动按 Normal 处理）。索引版本已升到 4（v0.6.1 回撤 5 类模板分类），旧索引会丢弃重建。
 - **酒馆护栏**：`rootSource != 0` 的条目默认禁止重命名/移动（API 返回 403），请求体带 `force:true` 才放行；酒馆源文件写前强制备份（忽略自动备份开关），TT 源备份保留 10 份。
 
 ---
@@ -310,7 +339,7 @@ v0.5.2 依据 `docs/full-audit-v0.5.0.md` 路线图完成备份可靠性、编�
 ```
 %APPDATA%\TavernVault\
 ├─ settings.json    # AppSettings：LibraryRoots / UiTheme / AutoBackup / MaxBackupsPerFile / BackupRootPath
-├─ index.json       # 索引：{ version: 3, items: [LibraryItem...] }，版本不符则丢弃重建
+├─ index.json       # 索引：{ version: 4, items: [LibraryItem...] }，版本不符则丢弃重建
 ├─ index.bak        # 上一版索引留档（每次 SaveIndex 前轮转，v0.5.1）
 ├─ settings.json.corrupt-*  # 设置损坏时的坏文件留档（v0.5.1，正常不存在）
 ├─ backups\         # 默认备份目录（可自定义到任意位置）
@@ -335,6 +364,10 @@ dotnet build TavernVault.slnx -c Release
 ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe
 # 无窗口（调试/测试）
 ./src/TavernVault.App/bin/Release/net10.0-windows/TavernVault.exe --server --port=47999 [--data=<目录>]
+# 打包分发（v0.6.1 起）——自包含单文件，产物 exe+wwwroot 落 dist/，实跑验证方式见 §3.16
+dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
+  -p:DebugType=none -p:AllowedReferenceRelatedFileExtensions=none -o dist/TavernVault-win-x64
 ```
 
 命令行参数（`App.xaml.cs` → `ApiServer.Build`）：
@@ -388,14 +421,16 @@ dotnet build TavernVault.slnx -c Release
 | v0.5.0 | **深度优化（依据第一轮独立架构评审）** | 修复 PNG 另存为静默数据损坏（删多余 WriteAllTextAsync + PNG 夹具回归）；本地 API 会话令牌（X-TV-Token / ?token=，恒定时间比对）+ Host 白名单 + server-connection.json；备份失败显性告警（warnings 外显 + UI toast）+ AppLog 滚动日志；写路径增量更新（`_byId` 字典 + `UpsertItem`/`RemoveItem` 替换 11 处全量 Rescan，**UpsertItem 回填收藏/标签**）+ SaveSettings 原子写；编辑并发防护（expectedModified→409）+ 单实例 Mutex；文档数字收敛（测试数/版本号单一事实源） |
 | v0.5.1 | **安全与可靠性加固（依据 docs/full-audit-v0.5.0.md）** | 详见 §3.11。P0：预设可视化 XSS（role 未转义）。P1：扫描跳过 junction、内嵌书导出文件名清洗、settings.json 损坏防护（+index.bak）、还原满上限自逐出（原子写回）、缩略图随数据目录。N1/N2/N3 既有项收尾；冒烟同目录可重复成为验收标准 |
 | v0.6.0 | **格式对齐 + 新建文件（新功能迭代）** | 详见 §3.15。ItemKind 13 类（5 个官方新类型 + ThemeKeys 修正 + Subdirs 11 项）；独立世界书容器保形（Spec V2/NovelAI 数组格式读改写不再损坏）；新建文件（11 类官方模板 + create 端点 + topbar 入口，创建即编辑）；单测 100、冒烟 191 |
+| v0.6.1 | **分类回撤 + 首次打包** | 详见 §3.16。侧栏 5 类官方模板分类回撤（奥卡姆剃刀：无专属编辑能力 + textgen 规则误收预设文件），文件回落"文本/脚本"、新建模板收敛 6 类、酒馆接入目录回撤 5 分区；索引 3→4 冷升级（收藏/标签快照回填）；自包含单文件打包（153MB，实跑验证）；单测 90、冒烟 168×2 轮 |
 | v0.5.3 | **v0.5.x 收尾** | UI 清单实跑 12 项全过（index.html 加 `?token=` 回退供外部浏览器冒烟；顺带修复内联脚本语法错误）；奥卡姆剃刀修剪无用代码（2 个旧重载、WriteText 包装、debounce、Console.WriteLine、2 份被取代的评审文档） |
 | v0.5.2 | **可靠性收尾 + 编辑器重构 + 测试补齐（full-audit §8 路线）** | 详见 §3.12。备份：Load 保留幽灵记录 + LoadWarning、RelocateTo 两阶段迁移；move 补写前备份（N4）；编辑器：Tab AbortController + 保存双视图互刷 + Esc 栈顶让位（两条静默数据丢失链切断）+ 409 自动重扫（N5）；App：9 端点异常收编、请求体上限 21MB、WebView2 UDF 搬家 + 导航拦截；测试：TavernGuardTests 6 项 + 冒烟酒馆护栏/错误合同两段，删除 Unit1 空壳 |
 
-### 9.2 当前状态（截至 2026-09-02）
+### 9.2 当前状态（截至 2026-09-05）
 
-- 分支 `qoder/TavernVault`；v0.5.2 已提交（改动：18 文件 +488/-121，含新增 TavernGuardTests）。
-- v0.5.2 验证情况：Release 构建 0 警告 0 错误；单元测试 54/54 全绿（+6：TavernGuardTests）；冒烟 **105 项 × 同一数据目录 2 轮全绿**（+24：酒馆护栏、错误合同）；前端 5 个 js `node --check` 通过。UI 清单待跑一轮（编辑器重构面大：表单/JSON 互切、保存互刷、Esc、409 恢复、另存为关闭）。
-- 审查报告：`docs/full-audit-v0.5.0.md` 为**已知问题权威清单**（剩余 P2 与 v0.6 计划以它为准）。
+- 分支 `qoder/TavernVault`；v0.6.1 开发完成（回撤 5 类官方模板分类 + 首次打包 + 文档收口）。
+- 验证情况：Release 构建 0 警告 0 错误；单元测试 90/90 全绿；冒烟 **168 项 × 同一数据目录 2 轮全绿**（识别回落/新建收敛/误收回归三段重写）；前端 5 个 js `node --check` 通过。
+- 打包：`dist/TavernVault-win-x64/`（自包含单文件 exe ≈153 MB + wwwroot，已入 .gitignore）；打包产物以 `--server` 模式实跑，`/api/meta` 返回 0.6.1.0 且 kinds 为回撤后 8 类。
+- 下一迭代主菜：**预设可视化三期**（拖拽排序 / 新增·删除提示词 / 角色分组切换），开发计划已立项于 §11 近期方向 1 与 README「后续方向」。
 
 ### 9.3 Git 信息
 
@@ -420,15 +455,21 @@ dotnet build TavernVault.slnx -c Release
 ### 未完成（当前收尾项）
 
 - [x] 浏览器 UI 清单跑一轮（v0.5.3 完成，12 项全过，见 §3.13）
+- [x] 发布/分发（v0.6.1 完成：自包含单文件打包 + 实跑验证，见 §3.16；升级数据迁移由索引版本门控与设置损坏防护覆盖）
 
-### 近期方向（v0.6，依据 full-audit §8 路线图）
+### 近期方向（v0.6.x → v0.7）
 
-1. **API 集成测试进 `dotnet test`**：用 TestServer 收编冒烟，摆脱"手工起服务再跑脚本"两步走，接入 GitHub Actions CI。
-2. **前端安全网 + 拆分**：editor.js 先落 UI 自动化冒烟再拆 god-file；编辑器 dirty/saveFn 会话化（消除跨会话窄窗竞态，full-audit P1-7 深修项）。
-3. **备份健康度**：设置弹窗显示上次成功备份时间与备份目录可写性探测。
-4. **发布/分发文档**：打包方式、WebView2 前置、升级数据迁移（full-audit §5 遗留）。
-5. **格式识别对齐酒馆官方**（对照表见 §3.13）：ThemeKeys 字段修正（`italics_text_color`/`quote_text_color`，核查 `bogus_folders` 归属）；独立世界书容器保形（`GET/PUT /api/lore` 支持 entries 数组与 Spec-V2 条目，行为对齐 `CharacterBook` 的保形策略）；新增类型识别：文本补全预设（TextGeneration Settings）、instruct/context/sysprompt 模板、QuickReplies、NovelAI 导出条目；`TavernDetector.Subdirs` 接入清单同步扩充。配检测夹具单测与冒烟。
-6. **新建文件**：各分类支持一键新建空白模板——角色卡（V2/V3 骨架）、世界书（ST 格式空 entries）、预设（prompts+prompt_order 骨架）、美化（官方字段骨架）、正则/脚本（骨架）；入口为分类空态引导 + 工具栏「新建」；写入当前普通库根，重名自动加序号（复用 `GetSaveAsPath` 语义），创建后直接进入对应编辑器。
+1. **预设可视化三期（已立项，下一迭代主菜）**——现状：可视化视图已支持采样参数编辑、生效顺序勾选启停、提示词详情编辑（v0.3.1 二期），但**顺序不可调整、条目不可增删**。开发计划：
+   - **拖拽排序**：生效顺序列表（`editor.js buildOrderCard` 的 `.preset-row`）加 HTML5 拖拽（`draggable` + `dragover` 重排 + 视觉占位），松手即按新行序写回当前分组 `order[]`——只重排数组次序，不动 `enabled` 与 `prompts[]` 本体；随后 `touch()` 走既有 dirty→保存→双视图互刷链（v0.5.2 机制），原文视图同步可见。
+   - **新增提示词**：表单（名称/角色/内容）→ 生成 identifier（uuid），同时写入 `prompts[]` 与当前分组 `order[]` 末尾（`enabled:true`）；成功后重渲染并在详情卡打开新条目。
+   - **删除提示词**：从 `prompts[]` 与**所有** `order[]` 分组同步移除该 identifier；`system_prompt === true` 的系统管理项禁删（按钮置灰 + 提示），对齐 quick-reference「数据格式坑」第 2 条。
+   - **角色分组切换**：`getOrder()` 现固定取 `character_id===100001`（回退首个分组）——改为下拉切换全部分组，增删/排序作用于当前选中分组；仅一个分组时下拉隐藏。
+   - **验收**：官方预设 + 多分组/含未排序提示词的第三方预设两档夹具冒烟；单测覆盖 order 重排与增删写回的保形（未知字段不丢、`prompts`/`order` 一致性）。
+2. **API 集成测试进 `dotnet test`**：用 TestServer 收编冒烟，摆脱"手工起服务再跑脚本"两步走，接入 GitHub Actions CI。
+3. **前端安全网 + 拆分**：editor.js 先落 UI 自动化冒烟再拆 god-file；编辑器 dirty/saveFn 会话化（消除跨会话窄窗竞态，full-audit P1-7 深修项）。
+4. **备份健康度**：设置弹窗显示上次成功备份时间与备份目录可写性探测。
+5. ~~格式识别对齐酒馆官方~~ ✅ **已完成**（v0.6.0 落地、v0.6.1 收敛：ThemeKeys 修正与独立世界书容器保形保留；5 类模板分类回撤，见 §3.16）。
+6. ~~新建文件~~ ✅ **已完成**（v0.6.0 上线 11 类模板 + 创建即编辑；v0.6.1 收敛为 6 类，见 §3.16）。
 
 ### 中远期方向（v0.6+）
 
@@ -437,7 +478,7 @@ dotnet build TavernVault.slnx -c Release
 6. **FileSystemWatcher**：监视库目录变化自动重扫；配套批量操作（多选移动/打标）。
 7. **内容指纹追踪用户数据**：外部改名后收藏/标签仍能找回（替代纯路径哈希 Id）。
 8. **形态扩展**：Core 层无 UI 依赖，可直接复用做 CLI 或托盘工具。
-9. **功能路线**（以 README「后续方向」为准）：预设可视化三期（拖拽排序/增删提示词）、内嵌世界书 ← 独立世界书合入、酒馆接入增强（断链提示/子目录白名单）。
+9. **功能路线**（以 README「后续方向」为准）：内嵌世界书 ← 独立世界书合入、酒馆接入增强（断链提示/子目录白名单）。
 
 ---
 
@@ -454,4 +495,4 @@ dotnet build TavernVault.slnx -c Release
 
 ---
 
-**文档版本**：4.0 · **最后更新**：2026-09-03 · 对应程序版本 v0.6.0
+**文档版本**：4.1 · **最后更新**：2026-09-05 · 对应程序版本 v0.6.1

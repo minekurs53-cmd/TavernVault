@@ -57,7 +57,8 @@ public sealed class SettingsStore
 
     // 索引结构版本：条目模型变化时 +1，旧索引直接丢弃全量重建，
     // 避免增量扫描复用缺少新字段的旧条目。
-    private const int IndexVersion = 3;
+    // v0.6.1：3→4——回撤 5 类官方模板分类（旧索引里的 kind 数字已失效，须重建）。
+    private const int IndexVersion = 4;
 
     public List<LibraryItem> LoadIndex()
     {

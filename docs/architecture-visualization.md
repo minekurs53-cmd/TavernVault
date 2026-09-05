@@ -25,7 +25,7 @@ graph TB
     subgraph Core["TavernVault.Core (无 UI 依赖, 可单测)"]
         VAULT["Vault<br/>内存索引 + 查询 + 护栏"]
         SCANNER["LibraryScanner<br/>递归扫描 + 增量复用"]
-        DETECTOR["TypeDetector<br/>内容识别 13 类"]
+        DETECTOR["TypeDetector<br/>内容识别 8 类"]
         TAVERND["TavernDetector<br/>酒馆安装探测"]
         STORE["SettingsStore<br/>settings/index 持久化"]
         BACKUP["BackupStore<br/>备份轮转与迁移"]

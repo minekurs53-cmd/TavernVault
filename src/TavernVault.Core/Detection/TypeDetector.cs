@@ -18,36 +18,6 @@ public static class TypeDetector
         "bogus_folders", "fast_ui_mode", "movingUI", "theme_color",
     ];
 
-    // 文本补全预设（官方 TextGen Settings/ 目录，如 Universal-Light.json / Deterministic.json）。
-    // 核心采样字段（default/content/presets/textgen/*.json 实测均含 temp 与 rep_pen）。
-    private static readonly string[] TextGenCoreKeys = ["temp", "rep_pen"];
-
-    // 其余官方采样字段（注意官方名：typical_p 而非 typical；mirostat_tau/eta 而非 mirostat_lr）。
-    private static readonly string[] TextGenSamplerKeys =
-    [
-        "top_p", "top_k", "top_a", "min_p", "typical_p", "tfs", "rep_pen_range",
-        "rep_pen_slope", "rep_pen_decay", "mirostat_mode", "mirostat_tau", "mirostat_eta",
-        "add_bos_token", "ban_eos_token", "skip_special_tokens", "temperature_last",
-        "smoothing_factor", "smoothing_curve", "dry_multiplier", "dynatemp",
-        "sampler_priority", "xtc_probability", "nsigma", "min_temp", "max_temp",
-    ];
-
-    // 指令模板（官方 instruct/ 目录，如 ChatML.json；separator_sequence 为旧版遗留字段，
-    // 官方 migrateInstructModeSettings 会把它并入 output_suffix，旧文件仍可能携带）。
-    private static readonly string[] InstructKeys =
-    [
-        "input_sequence", "output_sequence", "system_sequence", "stop_sequence",
-        "separator_sequence", "first_output_sequence", "last_output_sequence",
-        "first_input_sequence", "last_input_sequence", "last_system_sequence",
-    ];
-
-    // 上下文模板（官方 context/ 目录）。story_string 最具区分性，可单独命中；
-    // 其余为旧版模板 / 任务约定的次级特征（官方新旧模板均含 example_separator、chat_start）。
-    private static readonly string[] ContextKeys =
-    [
-        "char", "names", "example_separator", "chat_start", "chat_end", "trim_examples",
-    ];
-
     public static ItemKind DetectJson(JsonObject obj)
     {
         // V2/V3 角色卡
@@ -70,36 +40,13 @@ public static class TypeDetector
             (obj["first_mes"] is not null || obj["personality"] is not null || obj["scenario"] is not null))
             return ItemKind.Character;
 
-        // 系统提示模板（官方 sysprompt/ 目录，如 Blank.json：{name, content, post_history}）。
-        // post_history 是与酒馆助手脚本 {name, content} 区分的精确特征 → 必须置于脚本判定之前。
-        // （官方文件仅这三个键；裸 {name, content} 与脚本无法区分，按脚本处理——见 v0.6.0 handoff）
-        if (obj["name"] is not null && obj["content"] is not null && obj.ContainsKey("post_history"))
-            return ItemKind.SysPrompt;
-
         // 酒馆助手脚本 / ST 正则
+        // （v0.6.1：官方 sysprompt 文件 {name, content, post_history} 同样落入此规则——
+        //   与裸 {name, content} 一样无法与脚本可靠区分，统一按脚本归类）
         if (obj["name"] is not null && obj["content"] is not null)
             return ItemKind.Script;
         if (obj["scriptName"] is not null && obj["findRegex"] is not null)
             return ItemKind.Script;
-
-        // 快捷回复（官方 QuickReplies/ 目录）：v2 结构含 qrList 数组
-        // （quick-reply/src/QuickReplySet.js：{version:2, name, qrList:[…], disableSend, …}）；
-        // quickReplies 数组为旧命名兼容（内容判定不依赖其元素结构）。
-        if (obj["qrList"] is JsonArray || obj["quickReplies"] is JsonArray)
-            return ItemKind.QuickReplies;
-
-        // 指令模板：≥2 个序列特征（单一字段不足以区分普通字符串配置）
-        if (InstructKeys.Count(obj.ContainsKey) >= 2)
-            return ItemKind.InstructTemplate;
-
-        // 上下文模板：story_string 单独命中（官方模板必有）；否则按次级特征 ≥2
-        if (obj.ContainsKey("story_string") || ContextKeys.Count(obj.ContainsKey) >= 2)
-            return ItemKind.ContextTemplate;
-
-        // 文本补全预设：核心采样字段同在，或命中 ≥3 个采样字段。
-        // 置于主题判定之前：精确采样特征优先于主题的"两键即中"宽松规则。
-        if (TextGenCoreKeys.All(obj.ContainsKey) || TextGenSamplerKeys.Count(obj.ContainsKey) >= 3)
-            return ItemKind.TextGenPreset;
 
         // 美化主题
         int themeHits = ThemeKeys.Count(k => obj.ContainsKey(k));

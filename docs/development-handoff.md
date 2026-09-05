@@ -9,7 +9,7 @@
 > | `docs/quick-reference.md` | 速查手册：命令 / API / 数据格式坑 / 故障排查 |
 > | `docs/st-sync-feasibility.md` | 酒馆接入可行性分析（历史决策依据） |
 >
-> 当前版本：**v0.7.3** · 最后更新：2026-09-05
+> 当前版本：**v0.7.4** · 最后更新：2026-09-05
 
 ---
 
@@ -380,6 +380,28 @@ v0.5.2 依据 `docs/full-audit-v0.5.0.md` 路线图完成备份可靠性、编�
   ③Git Bash 会话内 python -c 传中文曾出现编码错乱——涉及中文路径的脚本一律落 .py 文件执行，
   校验用文件输出而非控制台打印。
 
+### 3.21 v0.7.4：API 集成测试进 dotnet test + GitHub Actions CI
+
+§11 复审"开源前工程底线"项落地，摆脱"手工起服务再跑冒烟脚本"两步走：
+
+- **集成测试项目** `tests/TavernVault.IntegrationTests`（net10.0-windows，引用 App 工程）：
+  `ApiFixture` 用 `ApiServer.Build(["--server", "--data=<临时目录>"])` 进程内起**真实 Kestrel**
+  （随机端口经 IServerAddressesFeature 探得），HttpClient 直连。隔离关键：**预置 settings.json**
+  登记临时测试根——EnsureDefaultRoot 探测到库根非空即跳过，测试永不触碰真实用户库（含酒馆探测）；
+  Dispose 整树直删（不进回收站）。`/api/items` 与 `/api/items/{id}/backups` 是**顶层数组**——
+  夹具为此分设 Get/GetArray。
+- **核心合同回归 14 项**（每 API 面正向+负向）：meta 形状（version/dataDir/三库）、令牌 401、
+  Host 伪装 403、静态页免令牌、create 六类识别回路+三类负向、text 读写/另存为、PNG 卡读写+
+  409 并发、世界书对象/数组容器保形、酒馆护栏矩阵（PUT×3 403/rename 403/导出副本可编辑/局外导出 400）、
+  收纳入库全链路（预扫描/执行/重名/move/四负向）、备份还原+修改历史已删过滤。
+  全量穷举仍归 smoke_api.py（发布前跑），分工见 §8。
+- **GitHub Actions** `.github/workflows/ci.yml`：windows-latest → setup-dotnet 10.0.x →
+  构建 → `dotnet test`（单测+纯函数+集成）→ 起服务跑冒烟（单轮）。push/PR 全分支触发。
+- **测试**：单测 93 + preset-model 18 + **集成 14**；冒烟 207×2 本地全绿。
+- **踩坑记录**：①smoke 惯用的 /api/items、/api/items/{id}/backups 是顶层数组，集成夹具需 GetArray；
+  ②测试里注册酒馆假根前忘了建目录（AddRoot 校验目录存在返回 400）；③async void 在 xUnit
+  产生告警且异常不可传播，一律 async Task。
+
 ---
 
 ## 4. REST API 参考
@@ -502,13 +524,15 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 
 | 层级 | 命令 / 入口 | 说明 |
 |---|---|---|
-| 单元测试 | `dotnet test TavernVault.slnx -c Release` | **数量以输出为准**。覆盖：PNG 块、内嵌书映射、备份/另存为/自定义备份位置、备份失败告警、UpsertItem 用户数据保留、PNG 保存图像块保留、增量扫描、用户数据迁移、来源过滤与 BuildLibraries 聚合（含冷升级自愈） |
+| 单元测试 | `dotnet test TavernVault.slnx -c Release` | **数量以输出为准**。覆盖：PNG 块、内嵌书映射、备份/另存为/自定义备份位置、备份失败告警、UpsertItem 用户数据保留、PNG 保存图像块保留、增量扫描、用户数据迁移、来源过滤与 BuildLibraries 聚合（含冷升级自愈）、收纳入库扫描/映射/唯一化（CollectTests，v0.7.3） |
 | 纯函数测试 | `node tests/preset-model.test.mjs` | 预设可视化写回逻辑（重排/增删/分组，18 项，无框架，退出码即结果） |
-| API 冒烟 | `python tests/smoke_api.py` | **数量以输出为准**。夹具自足（自建 testdata 并注册、自清理上轮残留含 backups/thumbs）；连接信息自动读 `<data>/server-connection.json`（TV_CONN/TV_BASE/TV_TOKEN 可覆写）；先 `--server --port=47999 --data=<临时目录>` 再跑；**写操作只作用于 testdata**；**同一数据目录可连续多轮运行全绿**（v0.5.1 起）。含 PNG 完整性回归、满上限还原回归、导出路径逃逸回归、409 并发防护、401/403 安全负向用例、酒馆托管 403 矩阵与导出流（v0.7.1）、文件监视自动重扫（v0.7.2）。**文件头有覆盖范围总览注释**（v0.7.2 复审：28 段与当前功能一一对应，无测已删功能的残留；缺口补齐：text saveas 正向、export 404、history 已删过滤）。**铁律：不含桌面副作用动作**（reveal 会弹资源管理器窗口，只测 404 合同）；前端逻辑不在冒烟范围 |
+| 集成测试 | `dotnet test TavernVault.slnx -c Release`（与单测同命令） | v0.7.4 起：`tests/TavernVault.IntegrationTests` 进程内起真实 Kestrel + 隔离临时库（预置 settings.json 防触碰真实库），14 项核心 API 合同回归（每面正向+负向）；全量穷举仍归冒烟，分工见本表冒烟行 |
+| API 冒烟 | `python tests/smoke_api.py` | **数量以输出为准**。夹具自足（自建 testdata 并注册、自清理上轮残留含 backups/thumbs）；连接信息自动读 `<data>/server-connection.json`（TV_CONN/TV_BASE/TV_TOKEN 可覆写）；先 `--server --port=47999 --data=<临时目录>` 再跑；**写操作只作用于 testdata**；**同一数据目录可连续多轮运行全绿**（v0.5.1 起）。含 PNG 完整性回归、满上限还原回归、导出路径逃逸回归、409 并发防护、401/403 安全负向用例、酒馆托管 403 矩阵与导出流（v0.7.1）、文件监视自动重扫（v0.7.2）、收纳入库全链路（v0.7.3）。**文件头有覆盖范围总览注释**（v0.7.2 复审）。**铁律：不含桌面副作用动作**（reveal 会弹资源管理器窗口，只测 404 合同）；前端逻辑不在冒烟范围 |
+| CI | `.github/workflows/ci.yml` | v0.7.4 起：windows-latest，push/PR 触发；构建 → dotnet test（单测+集成）→ 起服务跑冒烟单轮 |
 | UI 冒烟 | 浏览器打开 `http://127.0.0.1:47999/?token=<连接文件里的token>`（v0.5.3 起支持 query 回退） | 页面加载失败时读 `window.__errs`（index.html 内置探针）；截图存 `ui-shots/`（已 gitignore）。注意页面会记住上次停留的库选项卡（切库后再断言） |
 | 真实库验证 | `GET` 任意端点 | 只读核对可以，**绝不对真实库 PUT/POST** |
 
-单元测试文件：CharacterBookTests、CardAndDetectionTests、VaultQueryTests、BackupAndSaveAsTests、PngChunkIOTests、ScannerAndFileOpsTests、UnitTest1（数量随版本增长，以命令输出为准）。
+单元测试文件：CharacterBookTests、CardAndDetectionTests、VaultQueryTests、BackupAndSaveAsTests、PngChunkIOTests、ScannerAndFileOpsTests、CollectTests、TemplatesTests、DetectionTests（数量随版本增长，以命令输出为准）。
 
 ---
 
@@ -576,15 +600,13 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 
 ### 保留（按优先级）
 
-1. **API 集成测试进 `dotnet test` + CI**：TestServer 收编冒烟，摆脱"手工起服务再跑脚本"两步走；
-   开源前的工程底线。
-2. **内嵌世界书合入**：独立世界书导入卡片内嵌书（导出已支持）。纯局外操作，不受酒馆问题影响，
+1. **内嵌世界书合入**：独立世界书导入卡片内嵌书（导出已支持）。纯局外操作，不受酒馆问题影响，
    用户价值明确。
-3. **可移植性**（v0.4.3 起步）：首次启动向导（无库根时引导创建/选择库目录 + 探测酒馆）、可选便携模式——
+2. **可移植性**（v0.4.3 起步）：首次启动向导（无库根时引导创建/选择库目录 + 探测酒馆）、可选便携模式——
    与「收纳入库」联动（向导的"一键建库"即收纳特例，已完成核心能力，见 §3.20）。
-4. **前端 editor.js 拆分 + UI 自动化安全网**：god-file 持续膨胀（每期编辑器迭代都在加重）；
+3. **前端 editor.js 拆分 + UI 自动化安全网**：god-file 持续膨胀（每期编辑器迭代都在加重）；
    先落 UI 自动化冒烟再拆；编辑器 dirty/saveFn 会话化（full-audit P1-7 深修项）。
-5. **README 重写**（v0.7.3 提案已给出）：信息更全面且保持简洁，见版本提交说明与 §9.2。
+4. **README 重写**（v0.7.3 提案已定，等用户确认结构后执行）：信息更全面且保持简洁。
 
 ### 推迟（记录备查，不做承诺）
 
@@ -600,7 +622,8 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 
 ### 已完成（历史存档）
 
-- [x] **收纳入库**（v0.7.3，复审后优先级第一，见 §3.20）：散乱文件夹批量分类进库，源目录不动。
+- [x] **API 集成测试进 dotnet test + GitHub Actions CI**（v0.7.4，见 §3.21）：集成 14 项核心合同 + CI 全自动。
+- [x] **收纳入库**（v0.7.3，见 §3.20）：散乱文件夹批量分类进库，源目录不动。
 - [x] **文件监视自动重扫**（v0.7.2，见 §3.19）：外部/酒馆侧改动免手动重扫。
 - [x] 修改历史 + 数据目录可视化（v0.7.1，见 §3.18）
 - [x] 浏览器 UI 清单跑一轮（v0.5.3，12 项全过，见 §3.13）
@@ -623,4 +646,4 @@ dotnet publish src/TavernVault.App -c Release -r win-x64 --self-contained true \
 
 ---
 
-**文档版本**：4.5 · **最后更新**：2026-09-05 · 对应程序版本 v0.7.3
+**文档版本**：4.6 · **最后更新**：2026-09-05 · 对应程序版本 v0.7.4

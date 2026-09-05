@@ -395,7 +395,7 @@ check("libraries 存在三库", {l.get("key") for l in libs} == {"normal", "tave
 check("每库键齐全", all(
     all(k in l for k in ("key", "label", "total", "rootCount", "favorites", "kinds", "dirs", "tags"))
     for l in libs))
-check("每库 kinds 13 类", all(len(l["kinds"]) == 13 for l in libs))  # v0.6.0 起 8+5 类
+check("每库 kinds 8 类", all(len(l["kinds"]) == 8 for l in libs))  # v0.6.1 回撤 5 类官方模板分类
 check("库内不变量 Σkinds==total", all(sum(k["count"] for k in l["kinds"]) == l["total"] for l in libs))
 check("全局 total==Σ库 total", sum(l["total"] for l in libs) == meta["total"])
 roots_by_source = {}
@@ -542,39 +542,40 @@ shutil.rmtree(TAVERN, ignore_errors=True)
 try: os.rmdir(os.path.dirname(TAVERN))  # .smoke 父目录空了就一并撤掉
 except OSError: pass
 
-print("== 格式识别对齐（v0.6.0）==")
+print("== 格式识别回落（v0.6.1 回撤 5 类官方模板分类）==")
 # 夹具字段取自官方真实文件：
 #   textgen ← default/content/presets/textgen/Universal-Light.json
 #   instruct ← default/content/presets/instruct/ChatML.json
 #   context ← default/content/presets/context/Default.json
 #   sysprompt ← default/content/presets/sysprompt/Blank.json
 #   quickreplies ← quick-reply/src/QuickReplySet.js 的 v2 序列化结构
+# v0.6.1 起这 5 类不再设专属分类：官方模板 JSON 回落"文本"或"脚本"（原文编辑器可用）。
 # 段内自清理（条目进回收站 + 重扫）；段前先清残留文件，同数据目录可重复跑。
 V60_DIR = TESTDATA
 V60_FIXTURES = {
-    "冒烟文本预设.json": ("textgen", {
+    "冒烟文本预设.json": ("text", {
         "temp": 1.25, "temperature_last": False, "top_p": 1, "top_k": 0, "top_a": 0,
         "tfs": 1, "typical_p": 1, "min_p": 0.1, "rep_pen": 1, "rep_pen_range": 0,
         "smoothing_factor": 0, "add_bos_token": True, "ban_eos_token": False,
         "skip_special_tokens": True, "mirostat_mode": 0, "mirostat_tau": 5, "mirostat_eta": 0.1,
         "sampler_priority": ["repetition_penalty", "temperature"],
     }),
-    "冒烟指令模板.json": ("instruct", {
+    "冒烟指令模板.json": ("text", {
         "input_sequence": "<|im_start|>user", "output_sequence": "<|im_start|>assistant",
         "last_output_sequence": "", "system_sequence": "<|im_start|>system",
         "stop_sequence": "<|im_end|>", "wrap": True, "macro": True,
         "names_behavior": "force", "output_suffix": "<|im_end|>\n", "name": "ChatML",
     }),
-    "冒烟上下文模板.json": ("context", {
+    "冒烟上下文模板.json": ("text", {
         "story_string": "{{#if system}}{{system}}\n{{/if}}{{trim}}",
         "example_separator": "***", "chat_start": "***",
         "use_stop_strings": False, "names_as_stop_strings": True,
         "story_string_position": 0, "story_string_depth": 1, "name": "Default",
     }),
-    "冒烟系统提示.json": ("sysprompt", {
+    "冒烟系统提示.json": ("script", {
         "name": "Blank", "content": "", "post_history": "",
     }),
-    "冒烟快捷回复.json": ("quickreplies", {
+    "冒烟快捷回复.json": ("text", {
         "version": 2, "name": "我的快捷回复", "disableSend": False,
         "placeBeforeInput": False, "injectInput": False,
         "qrList": [{"id": 1, "label": "继续", "showLabel": True, "title": "",
@@ -583,7 +584,7 @@ V60_FIXTURES = {
         "idIndex": 1,
     }),
 }
-for fn in V60_FIXTURES:  # 清理上一轮残留（中途失败时文件可能还在）
+for fn in list(V60_FIXTURES) + ["冒烟误收预设.json"]:  # 清理上一轮残留（中途失败时文件可能还在）
     p = os.path.join(V60_DIR, fn)
     if os.path.exists(p):
         os.remove(p)
@@ -598,13 +599,23 @@ for fn, (kind, _) in V60_FIXTURES.items():
     check(f"识别 {kind}", len(found) == 1 and found[0]["kind"] == kind,
           str([(i["fileName"], i["kind"]) for i in found]))
 
-# 优先级回归：裸 {name, content} 仍判脚本（sysprompt 靠 post_history 精确区分）
+# 优先级回归：裸 {name, content} 与官方 sysprompt 三键文件同判脚本（v0.6.1 起 sysprompt 无专属分类）
 with open(os.path.join(V60_DIR, "冒烟普通脚本.json"), "w", encoding="utf-8") as f:
     json.dump({"name": "脚本", "content": "console.log(1)"}, f, ensure_ascii=False)
 call("POST", "/api/rescan")
 plain = call("GET", "/api/items?q=" + urllib.parse.quote("冒烟普通脚本"))
 check("裸 name+content 仍为 script", len(plain) == 1 and plain[0]["kind"] == "script",
       str([(i["fileName"], i["kind"]) for i in plain]))
+
+# 误收回归（v0.6.1 移除 textgen 规则的动机之一）：采样字段再多，只要带 prompts 数组就恒判预设
+with open(os.path.join(V60_DIR, "冒烟误收预设.json"), "w", encoding="utf-8") as f:
+    misread = dict(V60_FIXTURES["冒烟文本预设.json"][1])
+    misread["prompts"] = [{"identifier": "main"}]
+    json.dump(misread, f, ensure_ascii=False)
+call("POST", "/api/rescan")
+misread_items = call("GET", "/api/items?q=" + urllib.parse.quote("冒烟误收预设"))
+check("采样字段+prompts 恒判预设", len(misread_items) == 1 and misread_items[0]["kind"] == "preset",
+      str([(i["fileName"], i["kind"]) for i in misread_items]))
 
 # ---- Spec V2 数组世界书：GET 转 ST + container=array，PUT 保形合并，磁盘容器仍为数组 ----
 ARR_ORIGINAL = {
@@ -665,7 +676,7 @@ object_lore = call("GET", "/api/items?kind=lorebook&q=" + urllib.parse.quote("�
 check("对象容器默认行为不回归", call("GET", f"/api/lore/{object_lore[0]['id']}").get("container") == "object")
 
 # 段末清理：全部夹具进回收站 → 重扫
-for fn in V60_FIXTURES:
+for fn in list(V60_FIXTURES) + ["冒烟误收预设.json"]:
     it = call("GET", "/api/items?q=" + urllib.parse.quote(fn[:-len(".json")]))
     for row in it:
         call("POST", f"/api/items/{row['id']}/delete", {})
@@ -674,17 +685,15 @@ plain_id = call("GET", "/api/items?q=" + urllib.parse.quote("冒烟普通脚本"
 for row in plain_id:
     call("POST", f"/api/items/{row['id']}/delete", {})
 call("POST", "/api/rescan")
-check("v0.6.0 夹具已清理", all(
+check("v0.6.1 夹具已清理", all(
     call("GET", "/api/items?q=" + urllib.parse.quote(fn[:-len(".json")])) == []
-    for fn in list(V60_FIXTURES) + ["冒烟数组书.json", "冒烟普通脚本.json"]))
+    for fn in list(V60_FIXTURES) + ["冒烟数组书.json", "冒烟普通脚本.json", "冒烟误收预设.json"]))
 
-print("== 新建文件（v0.6.0）==")
-# 11 个可新建 kind（archive/other 不支持）。逐一 create → 识别回路 → 可编辑 → 删除清理。
+print("== 新建文件（v0.6.0，v0.6.1 收敛为 6 类）==")
+# 6 个可新建 kind（archive/other 不支持）。逐一 create → 识别回路 → 可编辑 → 删除清理。
 CREATE_KINDS = {
     "character": "角色卡", "lorebook": "世界书", "preset": "预设",
-    "textgen": "文本补全预设", "instruct": "指令模板", "context": "上下文模板",
-    "sysprompt": "系统提示模板", "quickreplies": "快捷回复", "theme": "美化",
-    "script": "脚本", "text": "文本",
+    "theme": "美化", "script": "脚本", "text": "文本",
 }
 created_ids = []
 
@@ -761,6 +770,8 @@ code = call_code("POST", "/api/items/create", {"kind": "archive", "name": "冒�
 check("kind=archive 400", code == 400, f"HTTP {code}")
 code = call_code("POST", "/api/items/create", {"kind": "other", "name": "冒烟新建其他"})
 check("kind=other 400", code == 400, f"HTTP {code}")
+code = call_code("POST", "/api/items/create", {"kind": "textgen", "name": "冒烟新建文本预设"})
+check("kind=textgen 400（v0.6.1 已回撤）", code == 400, f"HTTP {code}")
 code = call_code("POST", "/api/items/create", {"kind": "不存在的类型", "name": "x"})
 check("非法 kind 400", code == 400, f"HTTP {code}")
 code = call_code("POST", "/api/items/create", {"kind": "text", "name": ""})

@@ -1,7 +1,7 @@
 # TavernVault 快速参考指南
 
 > 日常开发速查。完整原理见 `docs/development-handoff.md`，图示见 `docs/architecture-visualization.md`。
-> 最后更新：2026-09-03 · 对应 v0.6.0
+> 最后更新：2026-09-05 · 对应 v0.6.1
 
 ## 一分钟了解
 
@@ -114,17 +114,16 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 |---|---|---|
 | `character` | 角色卡 | PNG tEXt 内嵌 chara/ccv3，或 JSON 卡片结构 |
 | `lorebook` | 世界书 | `entries` 结构 |
-| `preset` | 预设 | `prompts`+采样器 |
-| `theme` | 美化 | 主题 CSS/JSON 特征 |
-| `script` | 脚本 | 酒馆助手脚本/正则特征 |
+| `preset` | 预设 | `prompts`+采样器（带 prompts 数组恒判预设，采样字段再多也不例外） |
+| `theme` | 美化 | 主题 CSS/JSON 特征（官方字段名，v0.6.0 修正） |
+| `script` | 脚本 | 酒馆助手脚本/正则特征；`{name,content,post_history}`（官方 sysprompt）也归此 |
 | `text` | 文本 | 可读文本扩展名 |
-| `textgen` | 文本补全预设 | temp+rep_pen 或 ≥3 采样字段 |
-| `instruct` | 指令模板 | ≥2 个 *_sequence 字段 |
-| `context` | 上下文模板 | story_string |
-| `sysprompt` | 系统提示模板 | name+content+post_history |
-| `quickreplies` | 快捷回复 | qrList/quickReplies 数组 |
 | `archive` | 压缩包 | zip/7z/rar 等 |
 | `other` | 其他 | 兜底 |
+
+> v0.6.1 回撤了 v0.6.0 曾设的 5 类（`textgen`/`instruct`/`context`/`sysprompt`/`quickreplies`）：
+> 官方模板类 JSON 缺乏编辑价值且个别规则误收预设文件，统一回落"文本/脚本"（原文编辑器仍可编辑）；
+> `/api/items/create` 对这 5 个 kind 键返回 400。
 
 ## 数据格式坑（改编辑器前必看）
 
@@ -136,7 +135,7 @@ POST   /api/pick-folder                # 原生目录选择框（无窗口模式
 | entries 容器形态 | 数组/对象**不能互换**；v0.6.0 起 /api/lore 按容器保形（GET 回传 container，PUT 按容器写回） |
 | PNG 卡 | 保存必须一次重写 chara+ccv3 两个块（`WriteTexts`） |
 | JSON 卡 | 保存同步根级 V1 镜像（`SyncLegacyMirror`） |
-| 索引版本 | 改 `LibraryItem` 字段 → `IndexVersion` +1（当前 3） |
+| 索引版本 | 改 `LibraryItem` 字段或识别规则 → `IndexVersion` +1（当前 4；v0.6.1 因回撤 5 类由 3→4） |
 | 条目 Id | 路径哈希；改名/移动后必须迁移用户数据快照 |
 
 ## 故障排查

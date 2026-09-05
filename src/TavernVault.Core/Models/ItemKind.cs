@@ -2,8 +2,10 @@ namespace TavernVault.Core.Models;
 
 /// <summary>资源大类。识别依据是文件内容而非所在文件夹。</summary>
 /// <remarks>
-/// v0.6.0 新增的 5 类一律追加在枚举末尾：Kind 以数字（kindValue）持久化到 index.json，
-/// 中间插值会使旧索引错位（索引版本未变时不会重建）。
+/// v0.6.1 回撤了 v0.6.0 曾追加的 5 类（textgen/instruct/context/sysprompt/quickreplies）：
+/// 这些分类缺乏编辑价值且个别规则会误收预设文件。Kind 以数字（kindValue）持久化到
+/// index.json，本次识别规则变更已随索引版本 3→4 触发全量重建，不存在错位问题。
+/// 此后若再新增枚举值，仍须一律追加在末尾。
 /// </remarks>
 public enum ItemKind
 {
@@ -15,11 +17,6 @@ public enum ItemKind
     Text,        // 其他可读文本（yaml/md/txt/ts…）
     Archive,     // 压缩包
     Other,       // 其它二进制
-    TextGenPreset,     // 文本补全预设（TextGen Settings/，官方目录名见 TavernDetector.Subdirs）
-    InstructTemplate,  // 指令模板（instruct/）
-    ContextTemplate,   // 上下文模板（context/）
-    SysPrompt,         // 系统提示模板（sysprompt/）
-    QuickReplies,      // 快捷回复（QuickReplies/）
 }
 
 public static class ItemKindText
@@ -30,11 +27,6 @@ public static class ItemKindText
         (ItemKind.Character,      "character",    "角色卡"),
         (ItemKind.Lorebook,       "lorebook",     "世界书"),
         (ItemKind.Preset,         "preset",       "预设"),
-        (ItemKind.TextGenPreset,  "textgen",      "文本补全预设"),
-        (ItemKind.InstructTemplate, "instruct",   "指令模板"),
-        (ItemKind.ContextTemplate,  "context",    "上下文模板"),
-        (ItemKind.SysPrompt,      "sysprompt",    "系统提示模板"),
-        (ItemKind.QuickReplies,   "quickreplies", "快捷回复"),
         (ItemKind.Theme,          "theme",        "美化"),
         (ItemKind.Script,         "script",       "脚本"),
         (ItemKind.Text,           "text",         "文本"),

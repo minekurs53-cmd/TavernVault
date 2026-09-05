@@ -21,11 +21,11 @@ public class TemplatesTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
-    // 10 个 JSON 模板类型（text 走纯文本，archive/other 不支持新建）
+    // 5 个 JSON 模板类型（text 走纯文本，archive/other 不支持新建；
+    // v0.6.1 随 5 类官方模板分类回撤，从 10 类收敛）
     public static readonly string[] JsonKindKeys =
     [
-        "character", "lorebook", "preset", "textgen", "instruct",
-        "context", "sysprompt", "quickreplies", "theme", "script",
+        "character", "lorebook", "preset", "theme", "script",
     ];
 
     public static IEnumerable<object[]> JsonKindKeys_Rows() => JsonKindKeys.Select(k => new object[] { k });
@@ -89,8 +89,8 @@ public class TemplatesTests : IDisposable
         var preset = ContentTemplates.CreateJson(ItemKind.Preset, "新预设")!;
         Assert.Equal("新预设", preset["name"]!.GetValue<string>());
 
-        var qr = ContentTemplates.CreateJson(ItemKind.QuickReplies, "新快捷回复")!;
-        Assert.Equal("新快捷回复", qr["name"]!.GetValue<string>());
+        var theme = ContentTemplates.CreateJson(ItemKind.Theme, "新主题")!;
+        Assert.Equal("新主题", theme["name"]!.GetValue<string>());
 
         var regex = ContentTemplates.CreateJson(ItemKind.Script, "新正则")!;
         Assert.Equal("新正则", regex["scriptName"]!.GetValue<string>());

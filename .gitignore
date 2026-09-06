@@ -9,3 +9,6 @@ testdata-server/
 __pycache__/
 dist/
 屏幕截图*.png
+.env
+.env.*
+!.env.example
